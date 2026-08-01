@@ -68,6 +68,22 @@ export async function loginPassword({ identifier, password, remember = true, red
   });
 }
 
+/** Email OTP, step 1: send a six-digit code to the address. No Firebase involved. */
+export async function emailOtpStart({ email }) {
+  return post('/email-otp/start', { email });
+}
+
+/** Email OTP, step 2: verify the code and complete WordPress login. */
+export async function emailOtpVerify({ email, code, remember = true, redirectTo = '', displayName = '' }) {
+  return post('/email-otp/verify', {
+    email,
+    code,
+    remember,
+    redirect_to: redirectTo,
+    profile: displayName ? { display_name: displayName } : {},
+  });
+}
+
 /** Google Sign-In via Firebase popup. */
 export async function googleLogin({ redirectTo = '' } = {}) {
   const { auth, authMod } = await ensureFirebase();

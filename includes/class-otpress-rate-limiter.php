@@ -8,10 +8,14 @@ defined('ABSPATH') || exit;
 class OTPress_Rate_Limiter {
 
     /**
+     * @param string $extra_key Optional additional scope (e.g. the target
+     *                          email) so per-identity windows exist besides
+     *                          the per-IP one.
      * @return true|WP_Error
      */
-    public static function check(string $action, int $limit, int $window_seconds) {
-        $key   = 'otpress_rl_' . $action . '_' . md5(self::client_key());
+    public static function check(string $action, int $limit, int $window_seconds, string $extra_key = '') {
+        $scope = '' !== $extra_key ? $extra_key : self::client_key();
+        $key   = 'otpress_rl_' . $action . '_' . md5($scope);
         $count = (int) get_transient($key);
 
         if ($count >= $limit) {

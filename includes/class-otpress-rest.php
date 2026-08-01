@@ -37,11 +37,99 @@ class OTPress_REST {
             ],
         ]);
 
+        register_rest_route(self::NS, '/email-otp/start', [
+            'methods'             => 'POST',
+            'callback'            => [self::class, 'email_otp_start'],
+            'permission_callback' => [self::class, 'guard'],
+            'args'                => [
+                'email' => ['type' => 'string', 'required' => true],
+            ],
+        ]);
+
+        register_rest_route(self::NS, '/email-otp/verify', [
+            'methods'             => 'POST',
+            'callback'            => [self::class, 'email_otp_verify'],
+            'permission_callback' => [self::class, 'guard'],
+            'args'                => [
+                'email'       => ['type' => 'string', 'required' => true],
+                'code'        => ['type' => 'string', 'required' => true],
+                'remember'    => ['type' => 'boolean', 'default' => true],
+                'redirect_to' => ['type' => 'string', 'default' => ''],
+                'profile'     => ['type' => 'object', 'default' => []],
+            ],
+        ]);
+
         register_rest_route(self::NS, '/logout', [
             'methods'             => 'POST',
             'callback'            => [self::class, 'logout'],
             'permission_callback' => [self::class, 'guard'],
         ]);
+    }
+
+    public static function email_otp_start(WP_REST_Request $request) {
+        $email = sanitize_email((string) $request['email']);
+
+        $ip_limited = OTPress_Rate_Limiter::check('eotp_start_ip', 10, 10 * MINUTE_IN_SECONDS);
+        if (is_wp_error($ip_limited)) {
+            return $ip_limited;
+        }
+        $email_limited = OTPress_Rate_Limiter::check('eotp_start_email', 3, 10 * MINUTE_IN_SECONDS, strtolower($email));
+        if (is_wp_error($email_limited)) {
+            return $email_limited;
+        }
+
+        $sent = OTPress_Email_OTP::start($email);
+        if (is_wp_error($sent)) {
+            return self::error($sent, 400);
+        }
+
+        return new WP_REST_Response(['ok' => true]);
+    }
+
+    public static function email_otp_verify(WP_REST_Request $request) {
+        $limited = OTPress_Rate_Limiter::check('eotp_verify', 10, 10 * MINUTE_IN_SECONDS);
+        if (is_wp_error($limited)) {
+            return $limited;
+        }
+
+        $email  = sanitize_email((string) $request['email']);
+        $result = OTPress_Email_OTP::verify($email, (string) $request['code']);
+        if (is_wp_error($result)) {
+            return self::error($result, 401);
+        }
+
+        // Inbox ownership proven: treat as a verified email identity.
+        $profile = is_array($request['profile']) ? $request['profile'] : [];
+        $user    = OTPress_User_Mapper::resolve(
+            ['email' => $email, 'email_verified' => true],
+            $profile
+        );
+        if (is_wp_error($user)) {
+            return self::error($user, 403);
+        }
+
+        otpress_establish_session($user, (bool) $request['remember']);
+
+        return self::success($user, (string) $request['redirect_to']);
+    }
+
+    /**
+     * Password login is opt-in per user: usermeta `otpress_password_login`
+     * enables it; administrators are always allowed so the back office can
+     * never lock itself out. Everyone else gets the same generic failure as
+     * a wrong password, so the flag's existence is not observable.
+     */
+    private static function password_allowed(WP_User $user): bool {
+        $allowed = '1' === get_user_meta($user->ID, 'otpress_password_login', true)
+            || user_can($user, 'manage_options');
+
+        /**
+         * Filter whether this user may log in with a password.
+         *
+         * @param bool    $allowed
+         * @param WP_User $user
+         */
+        return (bool) apply_filters('otpress_password_login_allowed', $allowed, $user);
     }
 
     /**
@@ -107,6 +195,13 @@ class OTPress_REST {
             }
         }
 
+        $target = get_user_by('login', $login);
+        if (!$target || !self::password_allowed($target)) {
+            // Same generic message as a wrong password: no way to probe
+            // whether an account exists or has password login enabled.
+            return new WP_Error('otpress_bad_credentials', __('Incorrect login details.', 'otpress'), ['status' => 401]);
+        }
+
         $user = wp_signon([
             'user_login'    => $login,
             'user_password' => (string) $request['password'],
@@ -136,7 +231,10 @@ class OTPress_REST {
     }
 
     private static function success(WP_User $user, string $redirect_to): WP_REST_Response {
-        $redirect = wp_validate_redirect($redirect_to, home_url('/'));
+        $redirect = '' !== $redirect_to ? wp_validate_redirect($redirect_to, home_url('/')) : '';
+        if ('' === $redirect) {
+            $redirect = home_url('/');
+        }
         /**
          * Filter the post-login redirect URL.
          *

@@ -63,7 +63,19 @@ class OTPress_Frontend {
         ob_start();
         ?>
         <div class="otpress-form" data-otpress-form data-redirect="<?php echo $redirect; ?>">
-            <form data-otpress-password novalidate>
+            <form data-otpress-email novalidate>
+                <label class="otpress-label"><?php esc_html_e('Email address', 'otpress'); ?>
+                    <input class="otpress-input" type="email" name="email" autocomplete="email" required>
+                </label>
+                <button class="otpress-button" type="submit"><?php esc_html_e('Continue', 'otpress'); ?></button>
+            </form>
+            <form data-otpress-email-code hidden novalidate>
+                <label class="otpress-label"><?php esc_html_e('Verification code', 'otpress'); ?>
+                    <input class="otpress-input" inputmode="numeric" name="code" autocomplete="one-time-code" required>
+                </label>
+                <button class="otpress-button" type="submit"><?php esc_html_e('Verify', 'otpress'); ?></button>
+            </form>
+            <form data-otpress-password hidden novalidate>
                 <label class="otpress-label"><?php esc_html_e('Email, username or phone', 'otpress'); ?>
                     <input class="otpress-input" type="text" name="identifier" autocomplete="username" required>
                 </label>
