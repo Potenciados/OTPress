@@ -49,7 +49,21 @@ class OTPress_Email_OTP {
             $email
         );
 
-        if (!wp_mail($email, $subject, $message)) {
+        /**
+         * Filter an HTML body for the OTP email. Return non-empty HTML (e.g.
+         * rendered through the site's branded template system) and the email
+         * is sent as text/html; otherwise the plain-text message is used.
+         *
+         * @param string $html    Empty string by default.
+         * @param string $code    The six-digit code.
+         * @param string $email   Recipient address.
+         * @param string $subject Localized subject line.
+         */
+        $html    = apply_filters('otpress_email_otp_html', '', $code, $email, $subject);
+        $body    = '' !== $html ? $html : $message;
+        $headers = '' !== $html ? ['Content-Type: text/html; charset=UTF-8'] : [];
+
+        if (!wp_mail($email, $subject, $body, $headers)) {
             delete_transient(self::key($email));
             return new WP_Error('otpress_mail_failed', __('We could not send the email. Please try again.', 'otpress'));
         }
