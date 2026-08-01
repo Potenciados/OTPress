@@ -64,6 +64,30 @@ class OTPress_REST {
             ],
         ]);
 
+        register_rest_route(self::NS, '/whatsapp-otp/start', [
+            'methods'             => 'POST',
+            'callback'            => [self::class, 'whatsapp_otp_start'],
+            'permission_callback' => [self::class, 'guard'],
+            'args'                => [
+                'phone'           => ['type' => 'string', 'required' => true],
+                'challenge_token' => ['type' => 'string', 'default' => ''],
+            ],
+        ]);
+
+        register_rest_route(self::NS, '/whatsapp-otp/verify', [
+            'methods'             => 'POST',
+            'callback'            => [self::class, 'whatsapp_otp_verify'],
+            'permission_callback' => [self::class, 'guard'],
+            'args'                => [
+                'phone'       => ['type' => 'string', 'required' => true],
+                'code'        => ['type' => 'string', 'required' => true],
+                'link_ticket' => ['type' => 'string', 'default' => ''],
+                'remember'    => ['type' => 'boolean', 'default' => true],
+                'redirect_to' => ['type' => 'string', 'default' => ''],
+                'profile'     => ['type' => 'object', 'default' => []],
+            ],
+        ]);
+
         register_rest_route(self::NS, '/logout', [
             'methods'             => 'POST',
             'callback'            => [self::class, 'logout'],
@@ -157,6 +181,75 @@ class OTPress_REST {
                 // Inbox ownership of this account's email was just proven, so
                 // permanently attach the federated identity to it.
                 OTPress_User_Mapper::link_identity($user->ID, $claims);
+                self::consume_ticket($link_ticket);
+            }
+        }
+
+        otpress_establish_session($user, (bool) $request['remember']);
+
+        return self::success($user, (string) $request['redirect_to']);
+    }
+
+    public static function whatsapp_otp_start(WP_REST_Request $request) {
+        $challenge = self::verify_challenge($request);
+        if (is_wp_error($challenge)) {
+            return $challenge;
+        }
+
+        $phone = preg_replace('/[^\d+]/', '', (string) $request['phone']);
+
+        $ip_limited = OTPress_Rate_Limiter::check('waotp_start_ip', 10, 10 * MINUTE_IN_SECONDS);
+        if (is_wp_error($ip_limited)) {
+            return $ip_limited;
+        }
+        $phone_limited = OTPress_Rate_Limiter::check('waotp_start_phone', 3, 10 * MINUTE_IN_SECONDS, $phone);
+        if (is_wp_error($phone_limited)) {
+            return $phone_limited;
+        }
+
+        $sent = OTPress_WhatsApp_OTP::start($phone);
+        if (is_wp_error($sent)) {
+            return self::error($sent, 400);
+        }
+
+        return new WP_REST_Response(['ok' => true]);
+    }
+
+    public static function whatsapp_otp_verify(WP_REST_Request $request) {
+        $limited = OTPress_Rate_Limiter::check('waotp_verify', 10, 10 * MINUTE_IN_SECONDS);
+        if (is_wp_error($limited)) {
+            return $limited;
+        }
+
+        $phone  = preg_replace('/[^\d+]/', '', (string) $request['phone']);
+        $result = OTPress_WhatsApp_OTP::verify($phone, (string) $request['code']);
+        if (is_wp_error($result)) {
+            return self::error($result, 401);
+        }
+
+        // Possession of the number proven: verified phone identity, same
+        // decision flow as federated sign-ins (link-choice when unmatched).
+        $claims  = ['phone_number' => $phone];
+        $profile = is_array($request['profile']) ? $request['profile'] : [];
+        $user    = OTPress_User_Mapper::resolve($claims, $profile, false);
+
+        if (is_wp_error($user) && 'otpress_no_match' === $user->get_error_code()) {
+            return new WP_REST_Response([
+                'ok'     => false,
+                'code'   => 'otpress_link_choice',
+                'ticket' => self::issue_link_ticket($claims),
+                'email'  => '',
+            ]);
+        }
+        if (is_wp_error($user)) {
+            return self::error($user, 403);
+        }
+
+        $link_ticket = (string) $request['link_ticket'];
+        if ('' !== $link_ticket) {
+            $ticket_claims = self::ticket_claims($link_ticket);
+            if (is_array($ticket_claims)) {
+                OTPress_User_Mapper::link_identity($user->ID, $ticket_claims);
                 self::consume_ticket($link_ticket);
             }
         }

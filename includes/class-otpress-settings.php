@@ -30,6 +30,13 @@ class OTPress_Settings {
         // email-OTP start and password endpoints require a valid token.
         'turnstile_site_key'   => '',
         'turnstile_secret_key' => '',
+        // WhatsApp OTP via Meta Cloud API (optional). All three required to
+        // enable the channel: phone number id, permanent token, approved
+        // authentication template name.
+        'whatsapp_phone_number_id' => '',
+        'whatsapp_token'           => '',
+        'whatsapp_template'        => '',
+        'whatsapp_template_lang'   => 'es',
     ];
 
     public static function get(string $key): string {
@@ -103,6 +110,10 @@ class OTPress_Settings {
             'default_role'         => 'Role for new users (blank = site default)',
             'turnstile_site_key'   => 'Cloudflare Turnstile site key (optional)',
             'turnstile_secret_key' => 'Cloudflare Turnstile secret key (optional)',
+            'whatsapp_phone_number_id' => 'WhatsApp phone number ID (optional)',
+            'whatsapp_token'           => 'WhatsApp permanent token (optional)',
+            'whatsapp_template'        => 'WhatsApp auth template name (optional)',
+            'whatsapp_template_lang'   => 'WhatsApp template language code',
         ];
         ?>
         <div class="wrap">

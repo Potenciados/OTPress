@@ -107,6 +107,22 @@ export async function providerCreate({ ticket, redirectTo = '', displayName = ''
   });
 }
 
+/** WhatsApp OTP, step 1: send a six-digit code via WhatsApp. */
+export async function whatsappOtpStart({ phone, challengeToken = '' }) {
+  return post('/whatsapp-otp/start', { phone, challenge_token: challengeToken });
+}
+
+/** WhatsApp OTP, step 2: verify the code and complete WordPress login. */
+export async function whatsappOtpVerify({ phone, code, remember = true, redirectTo = '', linkTicket = '' }) {
+  return post('/whatsapp-otp/verify', {
+    phone,
+    code,
+    link_ticket: linkTicket,
+    remember,
+    redirect_to: redirectTo,
+  });
+}
+
 /**
  * Federated sign-in via Firebase popup. Supported providerIds:
  * 'google.com', 'facebook.com', 'microsoft.com'. On server-side rejection
