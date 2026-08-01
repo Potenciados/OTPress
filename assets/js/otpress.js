@@ -44,7 +44,9 @@ async function post(path, body) {
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok || !data.ok) {
-    throw new Error(data.message || cfg().i18n.genericError);
+    const err = new Error(data.message || cfg().i18n.genericError);
+    err.otpressCode = data.code || '';
+    throw err;
   }
   return data;
 }
@@ -84,12 +86,39 @@ export async function emailOtpVerify({ email, code, remember = true, redirectTo 
   });
 }
 
-/** Google Sign-In via Firebase popup. */
-export async function googleLogin({ redirectTo = '' } = {}) {
+/**
+ * Federated sign-in via Firebase popup. Supported providerIds:
+ * 'google.com', 'facebook.com', 'microsoft.com'. On server-side rejection
+ * the thrown Error carries `otpressCode` and `email` (when the provider
+ * returned one), letting UIs run fallback flows such as an email-OTP
+ * ownership challenge for providers with unverified emails (Facebook).
+ */
+const PROVIDER_FACTORIES = {
+  'google.com': (m) => new m.GoogleAuthProvider(),
+  'facebook.com': (m) => {
+    const p = new m.FacebookAuthProvider();
+    p.addScope('email');
+    return p;
+  },
+  'microsoft.com': (m) => new m.OAuthProvider('microsoft.com'),
+};
+
+export async function providerLogin(providerId, { redirectTo = '' } = {}) {
+  const factory = PROVIDER_FACTORIES[providerId];
+  if (!factory) throw new Error(`Unknown provider: ${providerId}`);
   const { auth, authMod } = await ensureFirebase();
-  const provider = new authMod.GoogleAuthProvider();
-  const credential = await authMod.signInWithPopup(auth, provider);
-  return finishWithCredential(credential, { redirectTo });
+  const credential = await authMod.signInWithPopup(auth, factory(authMod));
+  try {
+    return await finishWithCredential(credential, { redirectTo });
+  } catch (err) {
+    err.email = (credential.user && credential.user.email) || '';
+    throw err;
+  }
+}
+
+/** Google Sign-In via Firebase popup. */
+export async function googleLogin(opts = {}) {
+  return providerLogin('google.com', opts);
 }
 
 /**
