@@ -107,6 +107,12 @@ class OTPress_REST {
         if ('' === $secret) {
             return true;
         }
+        // Authenticated sessions (validated cookie, not just the REST
+        // context) skip the bot challenge: rate limits still apply and a
+        // logged-in cookie is a stronger signal than a Turnstile token.
+        if (wp_validate_auth_cookie('', 'logged_in')) {
+            return true;
+        }
         $token = (string) $request['challenge_token'];
         $error = new WP_Error('otpress_challenge', __('Security check failed. Please try again.', 'otpress'), ['status' => 403]);
         if ('' === $token) {
