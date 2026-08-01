@@ -63,18 +63,19 @@ async function finishWithCredential(userCredential, { redirectTo = '', profile =
 }
 
 /** Classic username / email / phone + password login through WordPress. */
-export async function loginPassword({ identifier, password, remember = true, redirectTo = '' }) {
+export async function loginPassword({ identifier, password, remember = true, redirectTo = '', challengeToken = '' }) {
   return post('/login/password', {
     identifier,
     password,
     remember,
     redirect_to: redirectTo,
+    challenge_token: challengeToken,
   });
 }
 
 /** Email OTP, step 1: send a six-digit code to the address. No Firebase involved. */
-export async function emailOtpStart({ email }) {
-  return post('/email-otp/start', { email });
+export async function emailOtpStart({ email, challengeToken = '' }) {
+  return post('/email-otp/start', { email, challenge_token: challengeToken });
 }
 
 /**

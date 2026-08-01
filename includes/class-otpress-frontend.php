@@ -42,8 +42,9 @@ class OTPress_Frontend {
         $printed = true;
 
         $config = [
-            'restUrl'  => esc_url_raw(rest_url('otpress/v1')),
-            'firebase' => OTPress_Settings::firebase_config(),
+            'restUrl'          => esc_url_raw(rest_url('otpress/v1')),
+            'firebase'         => OTPress_Settings::firebase_config(),
+            'turnstileSiteKey' => OTPress_Settings::get('turnstile_site_key'),
             'i18n'     => [
                 'genericError' => __('Something went wrong. Please try again.', 'otpress'),
                 'codeSent'     => __('We sent you a verification code.', 'otpress'),

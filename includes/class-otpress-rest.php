@@ -32,8 +32,9 @@ class OTPress_REST {
             'callback'            => [self::class, 'login_password'],
             'permission_callback' => [self::class, 'guard'],
             'args'                => [
-                'identifier'  => ['type' => 'string', 'required' => true],
-                'password'    => ['type' => 'string', 'required' => true],
+                'identifier'      => ['type' => 'string', 'required' => true],
+                'password'        => ['type' => 'string', 'required' => true],
+                'challenge_token' => ['type' => 'string', 'default' => ''],
                 'remember'    => ['type' => 'boolean', 'default' => true],
                 'redirect_to' => ['type' => 'string', 'default' => ''],
             ],
@@ -44,7 +45,8 @@ class OTPress_REST {
             'callback'            => [self::class, 'email_otp_start'],
             'permission_callback' => [self::class, 'guard'],
             'args'                => [
-                'email' => ['type' => 'string', 'required' => true],
+                'email'           => ['type' => 'string', 'required' => true],
+                'challenge_token' => ['type' => 'string', 'default' => ''],
             ],
         ]);
 
@@ -69,7 +71,44 @@ class OTPress_REST {
         ]);
     }
 
+    /**
+     * Cloudflare Turnstile check. A no-op until a secret key is configured;
+     * with one set, abuse-sensitive endpoints demand a valid token before
+     * doing anything expensive (sending mail, hitting the password check).
+     *
+     * @return true|WP_Error
+     */
+    private static function verify_challenge(WP_REST_Request $request) {
+        $secret = OTPress_Settings::get('turnstile_secret_key');
+        if ('' === $secret) {
+            return true;
+        }
+        $token = (string) $request['challenge_token'];
+        $error = new WP_Error('otpress_challenge', __('Security check failed. Please try again.', 'otpress'), ['status' => 403]);
+        if ('' === $token) {
+            return $error;
+        }
+        $response = wp_remote_post('https://challenges.cloudflare.com/turnstile/v0/siteverify', [
+            'timeout' => 10,
+            'body'    => [
+                'secret'   => $secret,
+                'response' => $token,
+                'remoteip' => (string) ($_SERVER['REMOTE_ADDR'] ?? ''),
+            ],
+        ]);
+        if (is_wp_error($response)) {
+            return $error;
+        }
+        $body = json_decode(wp_remote_retrieve_body($response), true);
+        return !empty($body['success']) ? true : $error;
+    }
+
     public static function email_otp_start(WP_REST_Request $request) {
+        $challenge = self::verify_challenge($request);
+        if (is_wp_error($challenge)) {
+            return $challenge;
+        }
+
         $email = sanitize_email((string) $request['email']);
 
         $ip_limited = OTPress_Rate_Limiter::check('eotp_start_ip', 10, 10 * MINUTE_IN_SECONDS);
@@ -250,6 +289,11 @@ class OTPress_REST {
         $limited = OTPress_Rate_Limiter::check('password', 10, 10 * MINUTE_IN_SECONDS);
         if (is_wp_error($limited)) {
             return $limited;
+        }
+
+        $challenge = self::verify_challenge($request);
+        if (is_wp_error($challenge)) {
+            return $challenge;
         }
 
         $identifier = trim((string) $request['identifier']);

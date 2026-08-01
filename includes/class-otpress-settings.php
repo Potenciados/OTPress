@@ -26,6 +26,10 @@ class OTPress_Settings {
         // verified phone number to an existing user.
         'phone_meta_keys'      => 'otpress_phone,digits_phone',
         'default_role'         => '',
+        // Cloudflare Turnstile (optional). When the secret is set, the
+        // email-OTP start and password endpoints require a valid token.
+        'turnstile_site_key'   => '',
+        'turnstile_secret_key' => '',
     ];
 
     public static function get(string $key): string {
@@ -97,6 +101,8 @@ class OTPress_Settings {
             'firebase_project_id'  => 'Firebase project ID',
             'phone_meta_keys'      => 'Phone usermeta keys (comma-separated)',
             'default_role'         => 'Role for new users (blank = site default)',
+            'turnstile_site_key'   => 'Cloudflare Turnstile site key (optional)',
+            'turnstile_secret_key' => 'Cloudflare Turnstile secret key (optional)',
         ];
         ?>
         <div class="wrap">
