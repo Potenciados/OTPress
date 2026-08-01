@@ -18,7 +18,9 @@ class OTPress_REST {
             'callback'            => [self::class, 'login_firebase'],
             'permission_callback' => [self::class, 'guard'],
             'args'                => [
-                'id_token'    => ['type' => 'string', 'required' => true],
+                'id_token'    => ['type' => 'string', 'default' => ''],
+                'ticket'      => ['type' => 'string', 'default' => ''],
+                'mode'        => ['type' => 'string', 'default' => '', 'enum' => ['', 'create']],
                 'remember'    => ['type' => 'boolean', 'default' => true],
                 'redirect_to' => ['type' => 'string', 'default' => ''],
                 'profile'     => ['type' => 'object', 'default' => []],
@@ -53,6 +55,7 @@ class OTPress_REST {
             'args'                => [
                 'email'       => ['type' => 'string', 'required' => true],
                 'code'        => ['type' => 'string', 'required' => true],
+                'link_ticket' => ['type' => 'string', 'default' => ''],
                 'remember'    => ['type' => 'boolean', 'default' => true],
                 'redirect_to' => ['type' => 'string', 'default' => ''],
                 'profile'     => ['type' => 'object', 'default' => []],
@@ -108,9 +111,38 @@ class OTPress_REST {
             return self::error($user, 403);
         }
 
+        $link_ticket = (string) $request['link_ticket'];
+        if ('' !== $link_ticket) {
+            $claims = self::ticket_claims($link_ticket);
+            if (is_array($claims)) {
+                // Inbox ownership of this account's email was just proven, so
+                // permanently attach the federated identity to it.
+                OTPress_User_Mapper::link_identity($user->ID, $claims);
+                self::consume_ticket($link_ticket);
+            }
+        }
+
         otpress_establish_session($user, (bool) $request['remember']);
 
         return self::success($user, (string) $request['redirect_to']);
+    }
+
+    private static function issue_link_ticket(array $claims): string {
+        $id = wp_generate_password(40, false, false);
+        set_transient('otpress_link_' . $id, $claims, 10 * MINUTE_IN_SECONDS);
+        return $id;
+    }
+
+    private static function ticket_claims(string $id): ?array {
+        if (!preg_match('/^[A-Za-z0-9]{40}$/', $id)) {
+            return null;
+        }
+        $claims = get_transient('otpress_link_' . $id);
+        return is_array($claims) ? $claims : null;
+    }
+
+    private static function consume_ticket(string $id): void {
+        delete_transient('otpress_link_' . $id);
     }
 
     /**
@@ -156,15 +188,57 @@ class OTPress_REST {
             return $limited;
         }
 
-        $claims = OTPress_Token_Verifier::verify((string) $request['id_token']);
-        if (is_wp_error($claims)) {
-            return self::error($claims, 401);
+        $id_token = (string) $request['id_token'];
+        $ticket   = (string) $request['ticket'];
+        $mode     = (string) $request['mode'];
+
+        if ('' !== $id_token) {
+            $claims = OTPress_Token_Verifier::verify($id_token);
+            if (is_wp_error($claims)) {
+                return self::error($claims, 401);
+            }
+        } elseif ('' !== $ticket) {
+            // A ticket carries claims from a token this endpoint already
+            // verified moments ago (see the link-choice response below).
+            $claims = self::ticket_claims($ticket);
+            if (null === $claims) {
+                return new WP_Error('otpress_ticket_expired', __('This sign-in attempt expired. Please try again.', 'otpress'), ['status' => 401]);
+            }
+        } else {
+            return new WP_Error('otpress_bad_request', __('Missing credentials.', 'otpress'), ['status' => 400]);
         }
 
         $profile = is_array($request['profile']) ? $request['profile'] : [];
-        $user    = OTPress_User_Mapper::resolve($claims, $profile);
+        $user    = OTPress_User_Mapper::resolve($claims, $profile, 'create' === $mode);
+
+        if (is_wp_error($user) && 'otpress_no_match' === $user->get_error_code()) {
+            // Nothing matched this identity. Instead of silently creating a
+            // duplicate account, hand the client a short-lived ticket so the
+            // user can choose: create fresh, or link to an existing account
+            // by proving its email via OTP.
+            return new WP_REST_Response([
+                'ok'     => false,
+                'code'   => 'otpress_link_choice',
+                'ticket' => self::issue_link_ticket($claims),
+                'email'  => sanitize_email((string) ($claims['email'] ?? '')),
+            ]);
+        }
+        if (is_wp_error($user) && 'otpress_email_unverified' === $user->get_error_code()) {
+            // Unverified provider email colliding with an existing account:
+            // same remedy as no-match linking — prove the inbox via OTP.
+            // Ship a ticket so the verify step attaches this identity too.
+            return new WP_REST_Response([
+                'ok'     => false,
+                'code'   => 'otpress_email_unverified',
+                'ticket' => self::issue_link_ticket($claims),
+                'email'  => sanitize_email((string) ($claims['email'] ?? '')),
+            ]);
+        }
         if (is_wp_error($user)) {
             return self::error($user, 403);
+        }
+        if ('' !== $ticket) {
+            self::consume_ticket($ticket);
         }
 
         otpress_establish_session($user, (bool) $request['remember']);

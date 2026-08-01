@@ -46,6 +46,8 @@ async function post(path, body) {
   if (!res.ok || !data.ok) {
     const err = new Error(data.message || cfg().i18n.genericError);
     err.otpressCode = data.code || '';
+    err.ticket = data.ticket || '';
+    err.providerEmail = data.email || '';
     throw err;
   }
   return data;
@@ -75,12 +77,30 @@ export async function emailOtpStart({ email }) {
   return post('/email-otp/start', { email });
 }
 
-/** Email OTP, step 2: verify the code and complete WordPress login. */
-export async function emailOtpVerify({ email, code, remember = true, redirectTo = '', displayName = '' }) {
+/**
+ * Email OTP, step 2: verify the code and complete WordPress login. Pass
+ * `linkTicket` (from a sign-in attempt that answered `otpress_link_choice`)
+ * to also attach that federated identity to the account being proven.
+ */
+export async function emailOtpVerify({ email, code, remember = true, redirectTo = '', displayName = '', linkTicket = '' }) {
   return post('/email-otp/verify', {
     email,
     code,
+    link_ticket: linkTicket,
     remember,
+    redirect_to: redirectTo,
+    profile: displayName ? { display_name: displayName } : {},
+  });
+}
+
+/**
+ * Complete a sign-in that answered `otpress_link_choice` by creating a NEW
+ * account from the already-verified claims held by the ticket.
+ */
+export async function providerCreate({ ticket, redirectTo = '', displayName = '' }) {
+  return post('/login/firebase', {
+    ticket,
+    mode: 'create',
     redirect_to: redirectTo,
     profile: displayName ? { display_name: displayName } : {},
   });

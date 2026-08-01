@@ -20,14 +20,19 @@ class OTPress_User_Mapper {
      * @param array $profile Optional client-supplied profile hints (display name).
      * @return WP_User|WP_Error
      */
-    public static function resolve(array $claims, array $profile = []) {
+    public static function resolve(array $claims, array $profile = [], bool $auto_create = true) {
         $phone          = self::e164((string) ($claims['phone_number'] ?? ''));
         $email          = sanitize_email((string) ($claims['email'] ?? ''));
         $email_verified = !empty($claims['email_verified']);
+        $sub            = (string) ($claims['sub'] ?? '');
 
         $user = null;
 
-        if ('' !== $phone) {
+        // Explicitly linked Firebase identities win over heuristics.
+        if ('' !== $sub) {
+            $user = self::find_by_uid($sub);
+        }
+        if (!$user && '' !== $phone) {
             $user = self::find_by_phone($phone);
         }
         if (!$user && '' !== $email && $email_verified) {
@@ -46,9 +51,16 @@ class OTPress_User_Mapper {
          */
         $user = apply_filters('otpress_resolve_user', $user, $claims);
 
-        if ($user instanceof WP_User) {
-            self::sync_meta($user->ID, $phone, $email, $email_verified);
+        if (is_wp_error($user)) {
             return $user;
+        }
+        if ($user instanceof WP_User) {
+            self::sync_meta($user->ID, $phone, $email, $email_verified, $sub);
+            return $user;
+        }
+
+        if (!$auto_create) {
+            return new WP_Error('otpress_no_match', __('No account matches these details.', 'otpress'));
         }
 
         if (!get_option('users_can_register') && !apply_filters('otpress_allow_registration', true, $claims)) {
@@ -56,6 +68,27 @@ class OTPress_User_Mapper {
         }
 
         return self::create_user($phone, $email, $email_verified, $claims, $profile);
+    }
+
+    /**
+     * Attach a verified Firebase identity (claims) to an existing user, so
+     * future sign-ins with that provider resolve directly to this account.
+     * Called after the user proved ownership of the account (email OTP).
+     */
+    public static function link_identity(int $user_id, array $claims): void {
+        $phone = self::e164((string) ($claims['phone_number'] ?? ''));
+        $email = sanitize_email((string) ($claims['email'] ?? ''));
+        self::sync_meta($user_id, $phone, $email, !empty($claims['email_verified']), (string) ($claims['sub'] ?? ''));
+    }
+
+    private static function find_by_uid(string $sub): ?WP_User {
+        $users = get_users([
+            'meta_key'   => 'otpress_firebase_uid',
+            'meta_value' => $sub,
+            'number'     => 1,
+            'fields'     => 'all',
+        ]);
+        return $users ? $users[0] : null;
     }
 
     private static function find_by_phone(string $phone): ?WP_User {
@@ -110,7 +143,7 @@ class OTPress_User_Mapper {
             return $user_id;
         }
 
-        self::sync_meta($user_id, $phone, $email, $email_verified);
+        self::sync_meta($user_id, $phone, $email, $email_verified, (string) ($claims['sub'] ?? ''));
 
         /**
          * Fires after OTPress creates a new user from a verified sign-in.
@@ -127,7 +160,13 @@ class OTPress_User_Mapper {
      * Keep phone/verification meta current, including Digits-compatible keys
      * so themes and plugins built against Digits keep reading correct data.
      */
-    private static function sync_meta(int $user_id, string $phone, string $email, bool $email_verified): void {
+    private static function sync_meta(int $user_id, string $phone, string $email, bool $email_verified, string $sub = ''): void {
+        if ('' !== $sub) {
+            $existing = get_user_meta($user_id, 'otpress_firebase_uid', false);
+            if (!in_array($sub, (array) $existing, true)) {
+                add_user_meta($user_id, 'otpress_firebase_uid', $sub);
+            }
+        }
         if ('' !== $phone) {
             update_user_meta($user_id, 'otpress_phone', $phone);
             if ('1' === OTPress_Settings::get('digits_compat')) {
