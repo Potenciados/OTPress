@@ -1,0 +1,140 @@
+/**
+ * OTPress front-end module.
+ *
+ * Framework-agnostic ES module. Reads boot config from `window.OTPRESS`
+ * (printed by OTPress_Frontend::print_config). The Firebase SDK is imported
+ * lazily so password-only sign-ins never pay its download cost.
+ */
+
+const cfg = () => {
+  if (!window.OTPRESS) throw new Error('OTPress config missing');
+  return window.OTPRESS;
+};
+
+let firebasePromise = null;
+let confirmation = null;
+let recaptcha = null;
+
+const FIREBASE_VERSION = '10.14.1';
+const gstatic = (mod) =>
+  `https://www.gstatic.com/firebasejs/${FIREBASE_VERSION}/${mod}`;
+
+async function ensureFirebase() {
+  if (!firebasePromise) {
+    firebasePromise = (async () => {
+      const [{ initializeApp }, authMod] = await Promise.all([
+        import(gstatic('firebase-app.js')),
+        import(gstatic('firebase-auth.js')),
+      ]);
+      const app = initializeApp(cfg().firebase);
+      const auth = authMod.getAuth(app);
+      auth.useDeviceLanguage();
+      return { auth, authMod };
+    })();
+  }
+  return firebasePromise;
+}
+
+async function post(path, body) {
+  const res = await fetch(`${cfg().restUrl}${path}`, {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json', 'X-OTPress': '1' },
+    body: JSON.stringify(body),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || !data.ok) {
+    throw new Error(data.message || cfg().i18n.genericError);
+  }
+  return data;
+}
+
+async function finishWithCredential(userCredential, { redirectTo = '', profile = {} } = {}) {
+  const idToken = await userCredential.user.getIdToken();
+  return post('/login/firebase', {
+    id_token: idToken,
+    redirect_to: redirectTo,
+    profile,
+  });
+}
+
+/** Classic username / email / phone + password login through WordPress. */
+export async function loginPassword({ identifier, password, remember = true, redirectTo = '' }) {
+  return post('/login/password', {
+    identifier,
+    password,
+    remember,
+    redirect_to: redirectTo,
+  });
+}
+
+/** Google Sign-In via Firebase popup. */
+export async function googleLogin({ redirectTo = '' } = {}) {
+  const { auth, authMod } = await ensureFirebase();
+  const provider = new authMod.GoogleAuthProvider();
+  const credential = await authMod.signInWithPopup(auth, provider);
+  return finishWithCredential(credential, { redirectTo });
+}
+
+/**
+ * Start phone sign-in: sends the SMS code. `recaptchaContainer` is a DOM
+ * element or id for Firebase's (invisible) reCAPTCHA app verification.
+ */
+export async function phoneStart(phoneE164, recaptchaContainer) {
+  const { auth, authMod } = await ensureFirebase();
+  if (!recaptcha) {
+    recaptcha = new authMod.RecaptchaVerifier(auth, recaptchaContainer, { size: 'invisible' });
+  }
+  confirmation = await authMod.signInWithPhoneNumber(auth, phoneE164, recaptcha);
+  return true;
+}
+
+/** Confirm the SMS code and complete WordPress login. */
+export async function phoneConfirm(code, { redirectTo = '', displayName = '' } = {}) {
+  if (!confirmation) throw new Error('phoneStart must run first');
+  const credential = await confirmation.confirm(code.trim());
+  return finishWithCredential(credential, {
+    redirectTo,
+    profile: displayName ? { display_name: displayName } : {},
+  });
+}
+
+export async function logout() {
+  return post('/logout', {});
+}
+
+/** Wire up the [otpress_form] default markup. Themes with custom UIs ignore this. */
+export function autobind(root = document) {
+  root.querySelectorAll('[data-otpress-form]').forEach((form) => {
+    const redirectTo = form.dataset.redirect || '';
+    const message = form.querySelector('[data-otpress-message]');
+    const say = (text) => { if (message) message.textContent = text; };
+    const go = (data) => { window.location.assign(data.redirect); };
+    const fail = (err) => say(err.message || cfg().i18n.genericError);
+
+    form.querySelector('[data-otpress-password]')?.addEventListener('submit', (e) => {
+      e.preventDefault();
+      const fd = new FormData(e.target);
+      loginPassword({ identifier: fd.get('identifier'), password: fd.get('password'), redirectTo })
+        .then(go, fail);
+    });
+
+    form.querySelector('[data-otpress-google]')?.addEventListener('click', () => {
+      googleLogin({ redirectTo }).then(go, fail);
+    });
+
+    const codeForm = form.querySelector('[data-otpress-code]');
+    form.querySelector('[data-otpress-phone]')?.addEventListener('submit', (e) => {
+      e.preventDefault();
+      const phone = new FormData(e.target).get('phone');
+      phoneStart(phone, form.querySelector('[data-otpress-recaptcha]'))
+        .then(() => { codeForm.hidden = false; say(cfg().i18n.codeSent); }, fail);
+    });
+
+    codeForm?.addEventListener('submit', (e) => {
+      e.preventDefault();
+      const code = new FormData(e.target).get('code');
+      phoneConfirm(code, { redirectTo }).then(go, fail);
+    });
+  });
+}
