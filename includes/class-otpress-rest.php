@@ -124,7 +124,12 @@ class OTPress_REST {
     }
 
     public static function logout() {
-        if (is_user_logged_in()) {
+        // Cookie-authenticated REST requests without a nonce run as user 0,
+        // so validate the logged-in cookie directly instead of relying on
+        // is_user_logged_in().
+        $user_id = wp_validate_auth_cookie('', 'logged_in');
+        if ($user_id) {
+            wp_set_current_user($user_id);
             wp_logout();
         }
         return new WP_REST_Response(['ok' => true, 'redirect' => home_url('/')]);
