@@ -181,6 +181,19 @@ export async function phoneConfirm(code, { redirectTo = '', displayName = '' } =
   });
 }
 
+/**
+ * Confirm the SMS code and LINK the phone to the already-logged-in account
+ * (change/add number from the Security tab) instead of logging in. The phone
+ * identity's id_token is attached via /identities/link, which updates
+ * otpress_phone through the user mapper.
+ */
+export async function linkPhoneConfirm(code) {
+  if (!confirmation) throw new Error('phoneStart must run first');
+  const credential = await confirmation.confirm(code.trim());
+  const idToken = await credential.user.getIdToken();
+  return post('/identities/link', { id_token: idToken });
+}
+
 export async function logout() {
   return post('/logout', {});
 }
