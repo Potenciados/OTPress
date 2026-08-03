@@ -266,6 +266,24 @@ export async function emailChangeConfirm({ ticket, code }) {
   return post('/email/change/confirm', { ticket, code });
 }
 
+// --- Optional password (opt-in, OTP-gated) ---
+/** Step 1: email a verification code. Returns { ticket, email }. */
+export async function passwordSetStart() {
+  return post('/password/set/start', {});
+}
+/** Step 2: prove the code. */
+export async function passwordSetVerify({ ticket, code }) {
+  return post('/password/set/verify', { ticket, code });
+}
+/** Step 3: store the new password and enable password login. */
+export async function passwordSetConfirm({ ticket, password }) {
+  return post('/password/set/confirm', { ticket, password });
+}
+/** Turn password login off (scrambles the stored hash). */
+export async function passwordDisable() {
+  return post('/password/disable', {});
+}
+
 // --- Passkeys (WebAuthn) -------------------------------------------------
 
 /** ArrayBuffer / Uint8Array -> unpadded base64url string. */

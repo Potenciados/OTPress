@@ -216,6 +216,106 @@ class OTPress_REST {
             'permission_callback' => [self::class, 'guard_logged_in'],
             'args'                => ['ticket' => ['type' => 'string', 'required' => true], 'code' => ['type' => 'string', 'required' => true]],
         ]);
+
+        // Optional password (opt-in): OTP-gated set, plus disable.
+        register_rest_route(self::NS, '/password/set/start', [
+            'methods'             => 'POST',
+            'callback'            => [self::class, 'password_set_start'],
+            'permission_callback' => [self::class, 'guard_logged_in'],
+        ]);
+        register_rest_route(self::NS, '/password/set/verify', [
+            'methods'             => 'POST',
+            'callback'            => [self::class, 'password_set_verify'],
+            'permission_callback' => [self::class, 'guard_logged_in'],
+            'args'                => ['ticket' => ['type' => 'string', 'required' => true], 'code' => ['type' => 'string', 'required' => true]],
+        ]);
+        register_rest_route(self::NS, '/password/set/confirm', [
+            'methods'             => 'POST',
+            'callback'            => [self::class, 'password_set_confirm'],
+            'permission_callback' => [self::class, 'guard_logged_in'],
+            'args'                => ['ticket' => ['type' => 'string', 'required' => true], 'password' => ['type' => 'string', 'required' => true]],
+        ]);
+        register_rest_route(self::NS, '/password/disable', [
+            'methods'             => 'POST',
+            'callback'            => [self::class, 'password_disable'],
+            'permission_callback' => [self::class, 'guard_logged_in'],
+        ]);
+    }
+
+    // ---------------------------------------------------------------------
+    // Optional password: OTP-gated so a hijacked session can't silently add
+    // a password. set/start emails a code, set/verify proves it, set/confirm
+    // stores the password and flips otpress_password_login on.
+    // ---------------------------------------------------------------------
+
+    private static function password_ticket(string $id): ?array {
+        if (!preg_match('/^[A-Za-z0-9]{40}$/', $id)) {
+            return null;
+        }
+        $t = get_transient('otpress_pwset_' . $id);
+        if (!is_array($t) || (int) ($t['user_id'] ?? 0) !== get_current_user_id()) {
+            return null;
+        }
+        return $t;
+    }
+
+    public static function password_set_start(WP_REST_Request $request) {
+        $user = wp_get_current_user();
+        if (!$user || !$user->user_email) {
+            return self::error(new WP_Error('otpress_no_email', __('Your account has no email address.', 'otpress')), 400);
+        }
+        $sent = OTPress_Email_OTP::start($user->user_email);
+        if (is_wp_error($sent)) {
+            return self::error($sent, 400);
+        }
+        $id = wp_generate_password(40, false, false);
+        set_transient('otpress_pwset_' . $id, ['user_id' => $user->ID, 'ok' => false], 15 * MINUTE_IN_SECONDS);
+        return new WP_REST_Response(['ok' => true, 'ticket' => $id, 'email' => $user->user_email]);
+    }
+
+    public static function password_set_verify(WP_REST_Request $request) {
+        $id = (string) $request->get_param('ticket');
+        $t  = self::password_ticket($id);
+        if (null === $t) {
+            return self::error(new WP_Error('otpress_bad_ticket', __('This request expired. Please start again.', 'otpress')), 400);
+        }
+        $ok = OTPress_Email_OTP::verify(wp_get_current_user()->user_email, (string) $request->get_param('code'));
+        if (is_wp_error($ok)) {
+            return self::error($ok, 400);
+        }
+        $t['ok'] = true;
+        set_transient('otpress_pwset_' . $id, $t, 15 * MINUTE_IN_SECONDS);
+        return new WP_REST_Response(['ok' => true]);
+    }
+
+    public static function password_set_confirm(WP_REST_Request $request) {
+        $id = (string) $request->get_param('ticket');
+        $t  = self::password_ticket($id);
+        if (null === $t || empty($t['ok'])) {
+            return self::error(new WP_Error('otpress_bad_ticket', __('Please verify the code first.', 'otpress')), 400);
+        }
+        $password = (string) $request->get_param('password');
+        if (strlen($password) < 8) {
+            return self::error(new WP_Error('otpress_weak_password', __('Use at least 8 characters.', 'otpress')), 400);
+        }
+        $uid = get_current_user_id();
+        // wp_set_password() destroys every session (including this one); re-issue
+        // the auth cookie so the user stays logged in after setting it.
+        wp_set_password($password, $uid);
+        wp_set_auth_cookie($uid, true);
+        update_user_meta($uid, 'otpress_password_login', '1');
+        delete_transient('otpress_pwset_' . $id);
+        return new WP_REST_Response(['ok' => true]);
+    }
+
+    public static function password_disable(WP_REST_Request $request) {
+        $uid = get_current_user_id();
+        // Scramble the stored hash so the old password can't be reused, and
+        // turn password login back off. OTP/social/passkey remain.
+        wp_set_password(wp_generate_password(64, true, true), $uid);
+        wp_set_auth_cookie($uid, true);
+        delete_user_meta($uid, 'otpress_password_login');
+        return new WP_REST_Response(['ok' => true]);
     }
 
     // ---------------------------------------------------------------------
