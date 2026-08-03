@@ -305,6 +305,11 @@ class OTPress_REST {
         if (hash_equals($id, self::current_session_key())) {
             return self::error(new WP_Error('otpress_current_session', __('Use log out to end the current session.', 'otpress')), 400);
         }
+        // Let the theme log the ended session before it's gone.
+        $all = get_user_meta($uid, 'session_tokens', true);
+        if (is_array($all) && isset($all[$id])) {
+            do_action('fy_session_ended', $uid, $all[$id], 'revoked');
+        }
         $manager = WP_Session_Tokens::get_instance($uid);
         try {
             $m = new ReflectionMethod($manager, 'update_session');
@@ -317,7 +322,17 @@ class OTPress_REST {
     }
 
     public static function sessions_revoke_others(WP_REST_Request $request) {
-        $manager = WP_Session_Tokens::get_instance(get_current_user_id());
+        $uid     = get_current_user_id();
+        $current = self::current_session_key();
+        $all     = get_user_meta($uid, 'session_tokens', true);
+        if (is_array($all)) {
+            foreach ($all as $key => $data) {
+                if (!hash_equals((string) $key, $current)) {
+                    do_action('fy_session_ended', $uid, $data, 'revoked');
+                }
+            }
+        }
+        $manager = WP_Session_Tokens::get_instance($uid);
         $manager->destroy_others(wp_get_session_token());
         return new WP_REST_Response(['ok' => true]);
     }
