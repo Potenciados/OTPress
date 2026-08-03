@@ -191,6 +191,131 @@ class OTPress_REST {
             'permission_callback' => [self::class, 'guard_logged_in'],
             'args'                => ['sub' => ['type' => 'string', 'required' => true]],
         ]);
+
+        // Change email — dual OTP (prove the current address, then the new one).
+        register_rest_route(self::NS, '/email/change/start', [
+            'methods'             => 'POST',
+            'callback'            => [self::class, 'email_change_start'],
+            'permission_callback' => [self::class, 'guard_logged_in'],
+        ]);
+        register_rest_route(self::NS, '/email/change/verify-current', [
+            'methods'             => 'POST',
+            'callback'            => [self::class, 'email_change_verify_current'],
+            'permission_callback' => [self::class, 'guard_logged_in'],
+            'args'                => ['ticket' => ['type' => 'string', 'required' => true], 'code' => ['type' => 'string', 'required' => true]],
+        ]);
+        register_rest_route(self::NS, '/email/change/send-new', [
+            'methods'             => 'POST',
+            'callback'            => [self::class, 'email_change_send_new'],
+            'permission_callback' => [self::class, 'guard_logged_in'],
+            'args'                => ['ticket' => ['type' => 'string', 'required' => true], 'email' => ['type' => 'string', 'required' => true]],
+        ]);
+        register_rest_route(self::NS, '/email/change/confirm', [
+            'methods'             => 'POST',
+            'callback'            => [self::class, 'email_change_confirm'],
+            'permission_callback' => [self::class, 'guard_logged_in'],
+            'args'                => ['ticket' => ['type' => 'string', 'required' => true], 'code' => ['type' => 'string', 'required' => true]],
+        ]);
+    }
+
+    // ---------------------------------------------------------------------
+    // Change email (dual OTP): prove ownership of the current address, then
+    // of the new one, before swapping user_email. Ticket carries the state.
+    // ---------------------------------------------------------------------
+
+    private static function email_change_ticket(string $id): ?array {
+        if (!preg_match('/^[A-Za-z0-9]{40}$/', $id)) {
+            return null;
+        }
+        $t = get_transient('otpress_emailchg_' . $id);
+        if (!is_array($t) || (int) ($t['user_id'] ?? 0) !== get_current_user_id()) {
+            return null;
+        }
+        return $t;
+    }
+
+    private static function email_change_save(string $id, array $t): void {
+        set_transient('otpress_emailchg_' . $id, $t, 15 * MINUTE_IN_SECONDS);
+    }
+
+    public static function email_change_start(WP_REST_Request $request) {
+        $user = wp_get_current_user();
+        if (!$user || !$user->user_email) {
+            return self::error(new WP_Error('otpress_no_email', __('Your account has no email address.', 'otpress')), 400);
+        }
+        $sent = OTPress_Email_OTP::start($user->user_email);
+        if (is_wp_error($sent)) {
+            return self::error($sent, 400);
+        }
+        $id = wp_generate_password(40, false, false);
+        self::email_change_save($id, ['user_id' => $user->ID, 'current_ok' => false, 'new_email' => '']);
+        return new WP_REST_Response(['ok' => true, 'ticket' => $id, 'email' => $user->user_email]);
+    }
+
+    public static function email_change_verify_current(WP_REST_Request $request) {
+        $id = (string) $request->get_param('ticket');
+        $t  = self::email_change_ticket($id);
+        if (null === $t) {
+            return self::error(new WP_Error('otpress_bad_ticket', __('This request expired. Please start again.', 'otpress')), 400);
+        }
+        $ok = OTPress_Email_OTP::verify(wp_get_current_user()->user_email, (string) $request->get_param('code'));
+        if (is_wp_error($ok)) {
+            return self::error($ok, 400);
+        }
+        $t['current_ok'] = true;
+        self::email_change_save($id, $t);
+        return new WP_REST_Response(['ok' => true]);
+    }
+
+    public static function email_change_send_new(WP_REST_Request $request) {
+        $id = (string) $request->get_param('ticket');
+        $t  = self::email_change_ticket($id);
+        if (null === $t || empty($t['current_ok'])) {
+            return self::error(new WP_Error('otpress_bad_ticket', __('Please verify your current email first.', 'otpress')), 400);
+        }
+        $new = sanitize_email((string) $request->get_param('email'));
+        if (!is_email($new)) {
+            return self::error(new WP_Error('otpress_bad_email', __('Please enter a valid email address.', 'otpress')), 400);
+        }
+        if (strtolower($new) === strtolower(wp_get_current_user()->user_email)) {
+            return self::error(new WP_Error('otpress_same_email', __('That is already your email address.', 'otpress')), 400);
+        }
+        $existing = email_exists($new);
+        if ($existing && (int) $existing !== get_current_user_id()) {
+            return self::error(new WP_Error('otpress_email_taken', __('That email is already in use.', 'otpress')), 409);
+        }
+        $sent = OTPress_Email_OTP::start($new);
+        if (is_wp_error($sent)) {
+            return self::error($sent, 400);
+        }
+        $t['new_email'] = $new;
+        self::email_change_save($id, $t);
+        return new WP_REST_Response(['ok' => true, 'email' => $new]);
+    }
+
+    public static function email_change_confirm(WP_REST_Request $request) {
+        $id = (string) $request->get_param('ticket');
+        $t  = self::email_change_ticket($id);
+        if (null === $t || empty($t['current_ok']) || empty($t['new_email'])) {
+            return self::error(new WP_Error('otpress_bad_ticket', __('This request expired. Please start again.', 'otpress')), 400);
+        }
+        $new = (string) $t['new_email'];
+        $ok  = OTPress_Email_OTP::verify($new, (string) $request->get_param('code'));
+        if (is_wp_error($ok)) {
+            return self::error($ok, 400);
+        }
+        // Re-check availability at the last moment (race window).
+        $existing = email_exists($new);
+        if ($existing && (int) $existing !== get_current_user_id()) {
+            return self::error(new WP_Error('otpress_email_taken', __('That email is already in use.', 'otpress')), 409);
+        }
+        $res = wp_update_user(['ID' => get_current_user_id(), 'user_email' => $new]);
+        if (is_wp_error($res)) {
+            return self::error($res, 400);
+        }
+        update_user_meta(get_current_user_id(), 'otpress_email_verified', $new);
+        delete_transient('otpress_emailchg_' . $id);
+        return new WP_REST_Response(['ok' => true, 'email' => $new]);
     }
 
     /** Guard + require a validated logged-in cookie (REST-without-nonce = user 0). */

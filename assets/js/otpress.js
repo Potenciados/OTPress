@@ -235,6 +235,24 @@ export async function ackPrompt(name) {
   return post('/prompts/ack', { name });
 }
 
+// --- Change email (dual OTP) ---
+/** Step 1: send a code to the current address. Returns { ticket, email }. */
+export async function emailChangeStart() {
+  return post('/email/change/start', {});
+}
+/** Step 2: prove the current address with its code. */
+export async function emailChangeVerifyCurrent({ ticket, code }) {
+  return post('/email/change/verify-current', { ticket, code });
+}
+/** Step 3: submit the new address; a code is sent to it. */
+export async function emailChangeSendNew({ ticket, email }) {
+  return post('/email/change/send-new', { ticket, email });
+}
+/** Step 4: prove the new address with its code; the swap happens server-side. */
+export async function emailChangeConfirm({ ticket, code }) {
+  return post('/email/change/confirm', { ticket, code });
+}
+
 // --- Passkeys (WebAuthn) -------------------------------------------------
 
 /** ArrayBuffer / Uint8Array -> unpadded base64url string. */
