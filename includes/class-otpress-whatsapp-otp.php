@@ -17,17 +17,70 @@ class OTPress_WhatsApp_OTP {
     private const TTL          = 10 * MINUTE_IN_SECONDS;
     private const MAX_ATTEMPTS = 5;
 
+    /**
+     * WhatsApp language codes we have approved template translations for.
+     * Anything outside this list (e.g. Icelandic, which WhatsApp does not
+     * support) falls back to English.
+     */
+    private const TEMPLATE_LANGS = [
+        'es', 'en_US', 'ar', 'pt_BR', 'fr', 'ms', 'ja', 'de', 'tr', 'ko',
+        'it', 'ca', 'sv', 'pl', 'nl', 'da', 'hr', 'fi', 'nb',
+    ];
+
     public static function is_configured(): bool {
         return '' !== OTPress_Settings::get('whatsapp_phone_number_id')
             && '' !== OTPress_Settings::get('whatsapp_token')
-            && '' !== OTPress_Settings::get('whatsapp_template');
+            && '' !== self::template_name('login');
+    }
+
+    /**
+     * Template for the context: a fresh number gets the account-verification
+     * copy, a known one the login copy. Both are Meta's own authentication
+     * templates, so their wording is already localized and approved.
+     */
+    public static function template_name(string $context = 'login'): string {
+        $key = 'signup' === $context ? 'whatsapp_template_signup' : 'whatsapp_template_login';
+        $name = OTPress_Settings::get($key);
+        return '' !== $name ? $name : OTPress_Settings::get('whatsapp_template');
+    }
+
+    /**
+     * Current site language as a WhatsApp template language code, falling back
+     * to English when we have no approved translation for it.
+     */
+    public static function template_lang(): string {
+        $locale = '';
+        if (function_exists('pll_current_language')) {
+            // Returns false outside a language context (cron, WP-CLI).
+            $locale = (string) pll_current_language('locale');
+        }
+        if ('' === $locale) {
+            $locale = get_locale();
+        }
+
+        // Locales whose WhatsApp code keeps the region, and the plain-language
+        // codes for everything else (es_ES -> es, fr_FR -> fr, ...).
+        static $explicit = ['en_US' => 'en_US', 'en_GB' => 'en_GB', 'pt_BR' => 'pt_BR', 'pt_PT' => 'pt_PT'];
+        if (isset($explicit[$locale])) {
+            $code = $explicit[$locale];
+        } else {
+            $code = strtolower(substr($locale, 0, 2));
+            if ('en' === $code) {
+                $code = 'en_US';
+            }
+        }
+
+        if (!in_array($code, self::TEMPLATE_LANGS, true)) {
+            $code = 'en_US';
+        }
+        return $code;
     }
 
     /**
      * @param string $phone E.164 phone number.
      * @return true|WP_Error
      */
-    public static function start(string $phone) {
+    public static function start(string $phone, string $context = 'login') {
         if (!self::is_configured()) {
             return new WP_Error('otpress_wa_unavailable', __('WhatsApp sign-in is not available.', 'otpress'));
         }
@@ -51,8 +104,8 @@ class OTPress_WhatsApp_OTP {
             'to'                => ltrim($phone, '+'),
             'type'              => 'template',
             'template'          => [
-                'name'     => OTPress_Settings::get('whatsapp_template'),
-                'language' => ['code' => OTPress_Settings::get('whatsapp_template_lang') ?: 'es'],
+                'name'     => self::template_name($context),
+                'language' => ['code' => self::template_lang()],
                 'components' => [
                     [
                         'type'       => 'body',

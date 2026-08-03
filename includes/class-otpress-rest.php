@@ -74,6 +74,13 @@ class OTPress_REST {
             ],
         ]);
 
+        register_rest_route(self::NS, '/otp/precheck', [
+            'methods'             => 'POST',
+            'callback'            => [self::class, 'otp_precheck'],
+            'permission_callback' => [self::class, 'guard'],
+            'args'                => ['phone' => ['type' => 'string', 'required' => true]],
+        ]);
+
         register_rest_route(self::NS, '/whatsapp-otp/verify', [
             'methods'             => 'POST',
             'callback'            => [self::class, 'whatsapp_otp_verify'],
@@ -675,11 +682,39 @@ class OTPress_REST {
             return $phone_limited;
         }
 
-        $sent = OTPress_WhatsApp_OTP::start($phone);
+        // Paid channel: refuse past the monthly allowance (paying customers
+        // are exempt) and point the caller at the free email code.
+        $budget = OTPress_OTP_Budget::check($phone, 'whatsapp');
+        if (is_wp_error($budget)) {
+            return self::error($budget, 429);
+        }
+
+        // A number we already know is signing in; a new one is signing up.
+        $known   = class_exists('OTPress_User_Mapper') && OTPress_User_Mapper::find_by_phone($phone);
+        $context = $known ? 'login' : 'signup';
+
+        $sent = OTPress_WhatsApp_OTP::start($phone, $context);
         if (is_wp_error($sent)) {
             return self::error($sent, 400);
         }
+        OTPress_OTP_Budget::record($phone);
 
+        return new WP_REST_Response(['ok' => true]);
+    }
+
+    /**
+     * Spend check before the client starts a Firebase SMS verification.
+     * Firebase sends that message from the browser, so this is the only place
+     * we can refuse it — the WhatsApp path is gated server-side in its own
+     * handler.
+     */
+    public static function otp_precheck(WP_REST_Request $request) {
+        $phone  = preg_replace('/[^\d+]/', '', (string) $request['phone']);
+        $budget = OTPress_OTP_Budget::check($phone, 'sms');
+        if (is_wp_error($budget)) {
+            return self::error($budget, 429);
+        }
+        OTPress_OTP_Budget::record($phone);
         return new WP_REST_Response(['ok' => true]);
     }
 

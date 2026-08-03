@@ -37,6 +37,12 @@ class OTPress_Settings {
         'whatsapp_token'           => '',
         'whatsapp_template'        => '',
         'whatsapp_template_lang'   => 'es',
+        // Meta's own authentication templates: one for a first-time number,
+        // one for a returning sign-in. Both are localized by WhatsApp.
+        'whatsapp_template_signup' => 'verify_account',
+        'whatsapp_template_login'  => 'login_code',
+        // Paid OTPs (SMS/WhatsApp) allowed per number per month; 0 disables.
+        'otp_monthly_allowance'    => '8',
     ];
 
     public static function get(string $key): string {
@@ -114,6 +120,9 @@ class OTPress_Settings {
             'whatsapp_token'           => 'WhatsApp permanent token (optional)',
             'whatsapp_template'        => 'WhatsApp auth template name (optional)',
             'whatsapp_template_lang'   => 'WhatsApp template language code',
+            'whatsapp_template_signup' => 'WhatsApp template for first-time numbers',
+            'whatsapp_template_login'  => 'WhatsApp template for returning sign-ins',
+            'otp_monthly_allowance'    => 'Paid OTPs per number per month (0 = unlimited)',
         ];
         ?>
         <div class="wrap">

@@ -48,6 +48,9 @@ async function post(path, body) {
     err.otpressCode = data.code || '';
     err.ticket = data.ticket || '';
     err.providerEmail = data.email || '';
+    // WP_Error payloads nest their extras under `data` (status, channel, and
+    // the masked account email for a spend-guard rejection).
+    err.maskedEmail = (data.data && data.data.email) || '';
     throw err;
   }
   return data;
@@ -161,8 +164,14 @@ export async function googleLogin(opts = {}) {
 /**
  * Start phone sign-in: sends the SMS code. `recaptchaContainer` is a DOM
  * element or id for Firebase's (invisible) reCAPTCHA app verification.
+ *
+ * Firebase bills every SMS and sends it straight from the browser, so the
+ * server gets a say first: /otp/precheck rejects numbers that have burned
+ * their monthly allowance (throwing with otpressCode 'otpress_otp_budget')
+ * before any message is paid for.
  */
 export async function phoneStart(phoneE164, recaptchaContainer) {
+  await post('/otp/precheck', { phone: phoneE164 });
   const { auth, authMod } = await ensureFirebase();
   if (!recaptcha) {
     recaptcha = new authMod.RecaptchaVerifier(auth, recaptchaContainer, { size: 'invisible' });

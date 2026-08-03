@@ -136,7 +136,8 @@ class OTPress_User_Mapper {
         return $users ? $users[0] : null;
     }
 
-    private static function find_by_phone(string $phone): ?WP_User {
+    /** Public so the OTP spend guard can tell whose number this is. */
+    public static function find_by_phone(string $phone): ?WP_User {
         global $wpdb;
         foreach (OTPress_Settings::phone_meta_keys() as $meta_key) {
             $user_id = $wpdb->get_var($wpdb->prepare(
