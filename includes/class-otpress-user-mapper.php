@@ -25,6 +25,7 @@ class OTPress_User_Mapper {
         $email          = sanitize_email((string) ($claims['email'] ?? ''));
         $email_verified = !empty($claims['email_verified']);
         $sub            = (string) ($claims['sub'] ?? '');
+        $provider       = (string) ($claims['firebase']['sign_in_provider'] ?? '');
 
         $user = null;
 
@@ -55,7 +56,7 @@ class OTPress_User_Mapper {
             return $user;
         }
         if ($user instanceof WP_User) {
-            self::sync_meta($user->ID, $phone, $email, $email_verified, $sub);
+            self::sync_meta($user->ID, $phone, $email, $email_verified, $sub, $provider);
             return $user;
         }
 
@@ -78,7 +79,51 @@ class OTPress_User_Mapper {
     public static function link_identity(int $user_id, array $claims): void {
         $phone = self::e164((string) ($claims['phone_number'] ?? ''));
         $email = sanitize_email((string) ($claims['email'] ?? ''));
-        self::sync_meta($user_id, $phone, $email, !empty($claims['email_verified']), (string) ($claims['sub'] ?? ''));
+        self::sync_meta($user_id, $phone, $email, !empty($claims['email_verified']), (string) ($claims['sub'] ?? ''), (string) ($claims['firebase']['sign_in_provider'] ?? ''));
+    }
+
+    /**
+     * List a user's linked federated identities (Google/Facebook/Microsoft/
+     * phone), as [{provider, sub, email, linked_at}]. Read from the
+     * structured `otpress_identity` meta.
+     */
+    public static function get_identities(int $user_id): array {
+        $rows = get_user_meta($user_id, 'otpress_identity', false);
+        $out = [];
+        foreach ((array) $rows as $row) {
+            $d = is_string($row) ? json_decode($row, true) : (is_array($row) ? $row : null);
+            if (is_array($d) && !empty($d['sub'])) {
+                $out[] = $d;
+            }
+        }
+        return $out;
+    }
+
+    /**
+     * Remove a linked identity by its Firebase uid. Email OTP is the
+     * universal fallback (any user with an email can always sign in), so
+     * unlinking a social provider never locks anyone out.
+     *
+     * @return true|WP_Error
+     */
+    public static function unlink_identity(int $user_id, string $sub) {
+        $found = false;
+        foreach (get_user_meta($user_id, 'otpress_firebase_uid', false) as $existing) {
+            if ((string) $existing === $sub) {
+                delete_user_meta($user_id, 'otpress_firebase_uid', $existing);
+                $found = true;
+            }
+        }
+        foreach (get_user_meta($user_id, 'otpress_identity', false) as $row) {
+            $d = is_string($row) ? json_decode($row, true) : $row;
+            if (is_array($d) && ($d['sub'] ?? '') === $sub) {
+                delete_user_meta($user_id, 'otpress_identity', $row);
+            }
+        }
+        if (!$found) {
+            return new WP_Error('otpress_no_identity', __('That connection was not found.', 'otpress'));
+        }
+        return true;
     }
 
     private static function find_by_uid(string $sub): ?WP_User {
@@ -113,6 +158,7 @@ class OTPress_User_Mapper {
      * @return WP_User|WP_Error
      */
     private static function create_user(string $phone, string $email, bool $email_verified, array $claims, array $profile) {
+        $provider = (string) ($claims['firebase']['sign_in_provider'] ?? '');
         $display = sanitize_text_field((string) ($profile['display_name'] ?? ($claims['name'] ?? '')));
 
         if ('' !== $email && $email_verified) {
@@ -143,7 +189,7 @@ class OTPress_User_Mapper {
             return $user_id;
         }
 
-        self::sync_meta($user_id, $phone, $email, $email_verified, (string) ($claims['sub'] ?? ''));
+        self::sync_meta($user_id, $phone, $email, $email_verified, (string) ($claims['sub'] ?? ''), $provider);
 
         /**
          * Fires after OTPress creates a new user from a verified sign-in.
@@ -160,11 +206,18 @@ class OTPress_User_Mapper {
      * Keep phone/verification meta current, including Digits-compatible keys
      * so themes and plugins built against Digits keep reading correct data.
      */
-    private static function sync_meta(int $user_id, string $phone, string $email, bool $email_verified, string $sub = ''): void {
+    private static function sync_meta(int $user_id, string $phone, string $email, bool $email_verified, string $sub = '', string $provider = ''): void {
         if ('' !== $sub) {
             $existing = get_user_meta($user_id, 'otpress_firebase_uid', false);
             if (!in_array($sub, (array) $existing, true)) {
                 add_user_meta($user_id, 'otpress_firebase_uid', $sub);
+                // Structured record for the account "connections" UI.
+                add_user_meta($user_id, 'otpress_identity', wp_json_encode([
+                    'provider'  => $provider ?: 'unknown',
+                    'sub'       => $sub,
+                    'email'     => $email,
+                    'linked_at' => time(),
+                ]));
             }
         }
         if ('' !== $phone) {

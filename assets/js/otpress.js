@@ -185,6 +185,31 @@ export async function logout() {
   return post('/logout', {});
 }
 
+/** List the logged-in user's linked social/phone identities. */
+export async function listIdentities() {
+  const res = await fetch(`${cfg().restUrl}/identities`, {
+    credentials: 'same-origin', headers: { 'X-OTPress': '1' },
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || !data.ok) throw new Error(data.message || cfg().i18n.genericError);
+  return data.identities || [];
+}
+
+/** Link a federated provider to the current account (opens its popup). */
+export async function linkProvider(providerId) {
+  const factory = PROVIDER_FACTORIES[providerId];
+  if (!factory) throw new Error(`Unknown provider: ${providerId}`);
+  const { auth, authMod } = await ensureFirebase();
+  const credential = await authMod.signInWithPopup(auth, factory(authMod));
+  const idToken = await credential.user.getIdToken();
+  return post('/identities/link', { id_token: idToken });
+}
+
+/** Unlink a federated identity by its Firebase uid. */
+export async function unlinkIdentity(sub) {
+  return post('/identities/unlink', { sub });
+}
+
 /** Wire up the [otpress_form] default markup. Themes with custom UIs ignore this. */
 export function autobind(root = document) {
   root.querySelectorAll('[data-otpress-form]').forEach((form) => {

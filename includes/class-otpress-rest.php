@@ -93,6 +93,71 @@ class OTPress_REST {
             'callback'            => [self::class, 'logout'],
             'permission_callback' => [self::class, 'guard'],
         ]);
+
+        // Account connections (logged-in only).
+        register_rest_route(self::NS, '/identities', [
+            'methods'             => 'GET',
+            'callback'            => [self::class, 'identities_list'],
+            'permission_callback' => [self::class, 'guard_logged_in'],
+        ]);
+        register_rest_route(self::NS, '/identities/link', [
+            'methods'             => 'POST',
+            'callback'            => [self::class, 'identities_link'],
+            'permission_callback' => [self::class, 'guard_logged_in'],
+            'args'                => ['id_token' => ['type' => 'string', 'required' => true]],
+        ]);
+        register_rest_route(self::NS, '/identities/unlink', [
+            'methods'             => 'POST',
+            'callback'            => [self::class, 'identities_unlink'],
+            'permission_callback' => [self::class, 'guard_logged_in'],
+            'args'                => ['sub' => ['type' => 'string', 'required' => true]],
+        ]);
+    }
+
+    /** Guard + require a validated logged-in cookie (REST-without-nonce = user 0). */
+    public static function guard_logged_in(WP_REST_Request $request) {
+        $g = self::guard($request);
+        if (is_wp_error($g)) {
+            return $g;
+        }
+        $uid = wp_validate_auth_cookie('', 'logged_in');
+        if (!$uid) {
+            return new WP_Error('otpress_forbidden', 'Not authenticated.', ['status' => 401]);
+        }
+        wp_set_current_user($uid);
+        return true;
+    }
+
+    public static function identities_list() {
+        return new WP_REST_Response([
+            'ok'         => true,
+            'identities' => OTPress_User_Mapper::get_identities(get_current_user_id()),
+        ]);
+    }
+
+    public static function identities_link(WP_REST_Request $request) {
+        $claims = OTPress_Token_Verifier::verify((string) $request['id_token']);
+        if (is_wp_error($claims)) {
+            return self::error($claims, 401);
+        }
+        $sub = (string) ($claims['sub'] ?? '');
+        // Refuse if this identity is already attached to a DIFFERENT account.
+        if ('' !== $sub) {
+            $owner = get_users(['meta_key' => 'otpress_firebase_uid', 'meta_value' => $sub, 'number' => 1, 'fields' => 'ids']);
+            if ($owner && (int) $owner[0] !== get_current_user_id()) {
+                return new WP_Error('otpress_identity_taken', __('That account is already linked to another user.', 'otpress'), ['status' => 409]);
+            }
+        }
+        OTPress_User_Mapper::link_identity(get_current_user_id(), $claims);
+        return new WP_REST_Response(['ok' => true, 'identities' => OTPress_User_Mapper::get_identities(get_current_user_id())]);
+    }
+
+    public static function identities_unlink(WP_REST_Request $request) {
+        $result = OTPress_User_Mapper::unlink_identity(get_current_user_id(), (string) $request['sub']);
+        if (is_wp_error($result)) {
+            return self::error($result, 400);
+        }
+        return new WP_REST_Response(['ok' => true, 'identities' => OTPress_User_Mapper::get_identities(get_current_user_id())]);
     }
 
     /**
