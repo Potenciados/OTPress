@@ -94,7 +94,86 @@ class OTPress_REST {
             'permission_callback' => [self::class, 'guard'],
         ]);
 
+        // Two-factor (TOTP).
+        register_rest_route(self::NS, '/totp/verify', [
+            'methods'             => 'POST',
+            'callback'            => [self::class, 'totp_verify'],
+            'permission_callback' => [self::class, 'guard'],
+            'args'                => ['ticket' => ['type' => 'string', 'required' => true], 'code' => ['type' => 'string', 'required' => true]],
+        ]);
+        register_rest_route(self::NS, '/totp/enroll/start', [
+            'methods'             => 'POST',
+            'callback'            => [self::class, 'totp_enroll_start'],
+            'permission_callback' => [self::class, 'guard_logged_in'],
+        ]);
+        register_rest_route(self::NS, '/totp/enroll/confirm', [
+            'methods'             => 'POST',
+            'callback'            => [self::class, 'totp_enroll_confirm'],
+            'permission_callback' => [self::class, 'guard_logged_in'],
+            'args'                => ['code' => ['type' => 'string', 'required' => true]],
+        ]);
+        register_rest_route(self::NS, '/totp/disable', [
+            'methods'             => 'POST',
+            'callback'            => [self::class, 'totp_disable'],
+            'permission_callback' => [self::class, 'guard_logged_in'],
+            'args'                => ['code' => ['type' => 'string', 'required' => true]],
+        ]);
+
+        // Passkeys (WebAuthn).
+        register_rest_route(self::NS, '/passkey/register/options', [
+            'methods'             => 'POST',
+            'callback'            => [self::class, 'passkey_register_options'],
+            'permission_callback' => [self::class, 'guard_logged_in'],
+        ]);
+        register_rest_route(self::NS, '/passkey/register/verify', [
+            'methods'             => 'POST',
+            'callback'            => [self::class, 'passkey_register_verify'],
+            'permission_callback' => [self::class, 'guard_logged_in'],
+            'args'                => [
+                'clientDataJSON'    => ['type' => 'string', 'required' => true],
+                'attestationObject' => ['type' => 'string', 'required' => true],
+                'name'              => ['type' => 'string', 'default' => ''],
+            ],
+        ]);
+        register_rest_route(self::NS, '/passkey/auth/options', [
+            'methods'             => 'POST',
+            'callback'            => [self::class, 'passkey_auth_options'],
+            'permission_callback' => [self::class, 'guard'],
+            'args'                => ['email' => ['type' => 'string', 'default' => '']],
+        ]);
+        register_rest_route(self::NS, '/passkey/auth/verify', [
+            'methods'             => 'POST',
+            'callback'            => [self::class, 'passkey_auth_verify'],
+            'permission_callback' => [self::class, 'guard'],
+            'args'                => [
+                'handle'            => ['type' => 'string', 'required' => true],
+                'credentialId'      => ['type' => 'string', 'required' => true],
+                'authenticatorData' => ['type' => 'string', 'required' => true],
+                'clientDataJSON'    => ['type' => 'string', 'required' => true],
+                'signature'         => ['type' => 'string', 'required' => true],
+                'userHandle'        => ['type' => 'string', 'default' => ''],
+                'remember'          => ['type' => 'boolean', 'default' => true],
+                'redirect_to'       => ['type' => 'string', 'default' => ''],
+            ],
+        ]);
+        register_rest_route(self::NS, '/passkey/list', [
+            'methods'             => 'POST',
+            'callback'            => [self::class, 'passkey_list'],
+            'permission_callback' => [self::class, 'guard_logged_in'],
+        ]);
+        register_rest_route(self::NS, '/passkey/remove', [
+            'methods'             => 'POST',
+            'callback'            => [self::class, 'passkey_remove'],
+            'permission_callback' => [self::class, 'guard_logged_in'],
+            'args'                => ['id' => ['type' => 'string', 'required' => true]],
+        ]);
+
         // Account connections (logged-in only).
+        register_rest_route(self::NS, '/prompts/ack', [
+            'methods'             => 'POST',
+            'callback'            => [self::class, 'prompts_ack'],
+            'permission_callback' => [self::class, 'guard_logged_in'],
+        ]);
         register_rest_route(self::NS, '/identities', [
             'methods'             => 'GET',
             'callback'            => [self::class, 'identities_list'],
@@ -256,9 +335,7 @@ class OTPress_REST {
             }
         }
 
-        otpress_establish_session($user, (bool) $request['remember']);
-
-        return self::success($user, (string) $request['redirect_to']);
+        return self::finish_login($user, (bool) $request['remember'], (string) $request['redirect_to']);
     }
 
     public static function whatsapp_otp_start(WP_REST_Request $request) {
@@ -325,9 +402,157 @@ class OTPress_REST {
             }
         }
 
-        otpress_establish_session($user, (bool) $request['remember']);
+        return self::finish_login($user, (bool) $request['remember'], (string) $request['redirect_to']);
+    }
 
-        return self::success($user, (string) $request['redirect_to']);
+    /**
+     * Complete a login, gating on 2FA: if the user has TOTP enabled, DON'T
+     * grant the session — revert any partial auth, stash a short-lived
+     * ticket, and tell the client a second factor is required.
+     */
+    private static function finish_login(WP_User $user, bool $remember, string $redirect) {
+        if (class_exists('OTPress_TOTP') && OTPress_TOTP::is_enabled($user->ID)) {
+            wp_clear_auth_cookie();
+            wp_set_current_user(0);
+            $id = wp_generate_password(40, false, false);
+            set_transient('otpress_2fa_' . $id, [
+                'user_id'  => $user->ID,
+                'remember' => $remember,
+                'redirect' => $redirect,
+            ], 10 * MINUTE_IN_SECONDS);
+            return new WP_REST_Response(['ok' => false, 'code' => 'otpress_2fa_required', 'ticket' => $id]);
+        }
+        otpress_establish_session($user, $remember);
+        return self::success($user, $redirect);
+    }
+
+    public static function totp_verify(WP_REST_Request $request) {
+        $limited = OTPress_Rate_Limiter::check('totp_verify', 10, 10 * MINUTE_IN_SECONDS);
+        if (is_wp_error($limited)) {
+            return $limited;
+        }
+        $id  = (string) $request['ticket'];
+        $key = preg_match('/^[A-Za-z0-9]{40}$/', $id) ? 'otpress_2fa_' . $id : '';
+        $data = $key ? get_transient($key) : false;
+        if (!is_array($data) || empty($data['user_id'])) {
+            return new WP_Error('otpress_2fa_expired', __('This sign-in attempt expired. Please try again.', 'otpress'), ['status' => 401]);
+        }
+        if (!OTPress_TOTP::verify_for_user((int) $data['user_id'], (string) $request['code'])) {
+            return new WP_Error('otpress_2fa_invalid', __('Incorrect code. Please try again.', 'otpress'), ['status' => 401]);
+        }
+        delete_transient($key);
+        $user = get_user_by('id', (int) $data['user_id']);
+        if (!$user) {
+            return new WP_Error('otpress_2fa_invalid', __('Account not found.', 'otpress'), ['status' => 401]);
+        }
+        otpress_establish_session($user, (bool) $data['remember']);
+        return self::success($user, (string) $data['redirect']);
+    }
+
+    public static function totp_enroll_start() {
+        $uid    = get_current_user_id();
+        $secret = OTPress_TOTP::generate_secret();
+        set_transient('otpress_totp_pending_' . $uid, $secret, 10 * MINUTE_IN_SECONDS);
+        $user = wp_get_current_user();
+        return new WP_REST_Response([
+            'ok'     => true,
+            'secret' => $secret,
+            'uri'    => OTPress_TOTP::provisioning_uri($secret, $user->user_email ?: $user->user_login, get_bloginfo('name')),
+        ]);
+    }
+
+    public static function totp_enroll_confirm(WP_REST_Request $request) {
+        $uid    = get_current_user_id();
+        $secret = get_transient('otpress_totp_pending_' . $uid);
+        if (!is_string($secret) || '' === $secret) {
+            return new WP_Error('otpress_totp_expired', __('Setup expired. Please start again.', 'otpress'), ['status' => 400]);
+        }
+        if (!OTPress_TOTP::verify($secret, (string) $request['code'])) {
+            return new WP_Error('otpress_totp_invalid', __('Incorrect code. Please check and try again.', 'otpress'), ['status' => 400]);
+        }
+        OTPress_TOTP::enroll($uid, $secret);
+        delete_transient('otpress_totp_pending_' . $uid);
+        return new WP_REST_Response(['ok' => true, 'recovery_codes' => OTPress_TOTP::generate_recovery_codes($uid)]);
+    }
+
+    public static function totp_disable(WP_REST_Request $request) {
+        $uid = get_current_user_id();
+        if (!OTPress_TOTP::verify_for_user($uid, (string) $request['code'])) {
+            return new WP_Error('otpress_totp_invalid', __('Incorrect code.', 'otpress'), ['status' => 400]);
+        }
+        OTPress_TOTP::disable($uid);
+        return new WP_REST_Response(['ok' => true]);
+    }
+
+    // ---------------------------------------------------------------------
+    // Passkeys (WebAuthn)
+    // ---------------------------------------------------------------------
+
+    public static function passkey_register_options() {
+        $options = OTPress_Passkey::registration_options(wp_get_current_user());
+        return new WP_REST_Response(['ok' => true, 'options' => $options]);
+    }
+
+    public static function passkey_register_verify(WP_REST_Request $request) {
+        $client = json_decode(OTPress_Passkey::from_b64url((string) $request['clientDataJSON']), true);
+        if (!is_array($client)) {
+            return new WP_Error('otpress_passkey_malformed', __('Could not read the passkey response.', 'otpress'), ['status' => 400]);
+        }
+        $attestation = OTPress_Passkey::from_b64url((string) $request['attestationObject']);
+        $result = OTPress_Passkey::verify_registration(wp_get_current_user(), $client, $attestation, (string) $request['name']);
+        if (is_wp_error($result)) {
+            return self::error($result, 400);
+        }
+        return new WP_REST_Response(['ok' => true, 'passkeys' => OTPress_Passkey::list_credentials(get_current_user_id())]);
+    }
+
+    public static function passkey_auth_options(WP_REST_Request $request) {
+        $limited = OTPress_Rate_Limiter::check('passkey_auth', 20, 10 * MINUTE_IN_SECONDS);
+        if (is_wp_error($limited)) {
+            return $limited;
+        }
+        $user  = null;
+        $email = sanitize_email((string) $request['email']);
+        if ('' !== $email) {
+            $found = get_user_by('email', $email);
+            if ($found) {
+                $user = $found;
+            }
+        }
+        return new WP_REST_Response(['ok' => true, 'options' => OTPress_Passkey::authentication_options($user)]);
+    }
+
+    public static function passkey_auth_verify(WP_REST_Request $request) {
+        $limited = OTPress_Rate_Limiter::check('passkey_verify', 20, 10 * MINUTE_IN_SECONDS);
+        if (is_wp_error($limited)) {
+            return $limited;
+        }
+        $user = OTPress_Passkey::verify_authentication([
+            'handle'            => (string) $request['handle'],
+            'credentialId'      => (string) $request['credentialId'],
+            'authenticatorData' => (string) $request['authenticatorData'],
+            'clientDataJSON'    => (string) $request['clientDataJSON'],
+            'signature'         => (string) $request['signature'],
+        ]);
+        if (is_wp_error($user)) {
+            return self::error($user, 401);
+        }
+        // Passkeys are already strong auth, but route through finish_login so
+        // an enrolled TOTP factor still gates and session/redirect handling
+        // matches every other login path.
+        return self::finish_login($user, (bool) $request['remember'], (string) $request['redirect_to']);
+    }
+
+    public static function passkey_list() {
+        return new WP_REST_Response(['ok' => true, 'passkeys' => OTPress_Passkey::list_credentials(get_current_user_id())]);
+    }
+
+    public static function passkey_remove(WP_REST_Request $request) {
+        $result = OTPress_Passkey::remove_credential(get_current_user_id(), (string) $request['id']);
+        if (is_wp_error($result)) {
+            return self::error($result, 400);
+        }
+        return new WP_REST_Response(['ok' => true, 'passkeys' => OTPress_Passkey::list_credentials(get_current_user_id())]);
     }
 
     private static function issue_link_ticket(array $claims): string {
@@ -444,9 +669,7 @@ class OTPress_REST {
             self::consume_ticket($ticket);
         }
 
-        otpress_establish_session($user, (bool) $request['remember']);
-
-        return self::success($user, (string) $request['redirect_to']);
+        return self::finish_login($user, (bool) $request['remember'], (string) $request['redirect_to']);
     }
 
     public static function login_password(WP_REST_Request $request) {
@@ -497,7 +720,7 @@ class OTPress_REST {
 
         wp_set_current_user($user->ID);
 
-        return self::success($user, (string) $request['redirect_to']);
+        return self::finish_login($user, (bool) $request['remember'], (string) $request['redirect_to']);
     }
 
     public static function logout() {
@@ -529,7 +752,41 @@ class OTPress_REST {
             'ok'       => true,
             'redirect' => $redirect,
             'user'     => ['display_name' => $user->display_name],
+            'prompts'  => self::pending_prompts($user->ID),
         ]);
+    }
+
+    /**
+     * Proactive one-time invitations to surface right after login (2FA,
+     * passkey). Each is offered at most once per user: the client shows it,
+     * then POSTs /prompts/ack to set the "offered" flag regardless of the
+     * user's choice, so it never reappears. Already-configured features are
+     * skipped outright.
+     */
+    private static function pending_prompts(int $user_id): array {
+        $prompts = [];
+        if (class_exists('OTPress_TOTP')
+            && !OTPress_TOTP::is_enabled($user_id)
+            && '1' !== get_user_meta($user_id, 'otpress_2fa_offered', true)) {
+            $prompts[] = '2fa';
+        }
+        if (class_exists('OTPress_Passkey')
+            && !OTPress_Passkey::has_credentials($user_id)
+            && '1' !== get_user_meta($user_id, 'otpress_passkey_offered', true)) {
+            $prompts[] = 'passkey';
+        }
+        return $prompts;
+    }
+
+    /** Mark a proactive invitation as offered so it never shows again. */
+    public static function prompts_ack(WP_REST_Request $request) {
+        $name = preg_replace('/[^a-z0-9_]/', '', (string) $request->get_param('name'));
+        $allowed = ['2fa', 'passkey'];
+        if (!in_array($name, $allowed, true)) {
+            return self::error(new WP_Error('otpress_bad_prompt', __('Unknown prompt.', 'otpress')), 400);
+        }
+        update_user_meta(get_current_user_id(), "otpress_{$name}_offered", '1');
+        return new WP_REST_Response(['ok' => true]);
     }
 
     private static function error(WP_Error $error, int $status): WP_Error {

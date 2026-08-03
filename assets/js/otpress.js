@@ -210,6 +210,126 @@ export async function unlinkIdentity(sub) {
   return post('/identities/unlink', { sub });
 }
 
+/** Complete a login gated by 2FA: submit the TOTP (or recovery) code + ticket. */
+export async function totpVerify({ ticket, code }) {
+  return post('/totp/verify', { ticket, code });
+}
+
+/** Begin TOTP enrollment: returns { secret, uri } for the QR. */
+export async function totpEnrollStart() {
+  return post('/totp/enroll/start', {});
+}
+
+/** Confirm TOTP enrollment with a code; returns { recovery_codes }. */
+export async function totpEnrollConfirm(code) {
+  return post('/totp/enroll/confirm', { code });
+}
+
+/** Disable TOTP (requires a current code). */
+export async function totpDisable(code) {
+  return post('/totp/disable', { code });
+}
+
+/** Acknowledge a one-time proactive invitation ('2fa' | 'passkey') so it never reappears. */
+export async function ackPrompt(name) {
+  return post('/prompts/ack', { name });
+}
+
+// --- Passkeys (WebAuthn) -------------------------------------------------
+
+/** ArrayBuffer / Uint8Array -> unpadded base64url string. */
+export function bufToB64url(buf) {
+  const bytes = new Uint8Array(buf);
+  let bin = '';
+  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+  return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+/** base64url string -> ArrayBuffer. */
+export function b64urlToBuf(str) {
+  const pad = str.length % 4 === 0 ? '' : '='.repeat(4 - (str.length % 4));
+  const bin = atob(str.replace(/-/g, '+').replace(/_/g, '/') + pad);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return bytes.buffer;
+}
+
+/** True when this browser exposes the WebAuthn platform API. */
+export function passkeySupported() {
+  return typeof window !== 'undefined'
+    && !!window.PublicKeyCredential
+    && typeof navigator !== 'undefined'
+    && !!(navigator.credentials && navigator.credentials.create);
+}
+
+/**
+ * Register a new passkey for the logged-in user. Fetches creation options,
+ * calls navigator.credentials.create(), and posts the attestation back.
+ * Returns { ok, passkeys }.
+ */
+export async function passkeyRegister(friendlyName = '') {
+  const { options } = await post('/passkey/register/options', {});
+  const publicKey = {
+    ...options,
+    challenge: b64urlToBuf(options.challenge),
+    user: { ...options.user, id: b64urlToBuf(options.user.id) },
+    excludeCredentials: (options.excludeCredentials || []).map((c) => ({
+      ...c, id: b64urlToBuf(c.id),
+    })),
+  };
+  const cred = await navigator.credentials.create({ publicKey });
+  if (!cred) throw new Error(cfg().i18n.genericError);
+  return post('/passkey/register/verify', {
+    name: friendlyName,
+    clientDataJSON: bufToB64url(cred.response.clientDataJSON),
+    attestationObject: bufToB64url(cred.response.attestationObject),
+  });
+}
+
+/**
+ * Authenticate with a passkey. Pass an `email` to scope the credential list,
+ * or omit it for a discoverable (usernameless) sign-in. `mediation` may be
+ * 'conditional' for autofill-style UI. Returns the standard { ok, redirect,
+ * prompts } login shape so an auth modal's `go()` handler works unchanged.
+ */
+export async function passkeyAuthenticate({ email = '', redirectTo = '', remember = true, mediation, signal } = {}) {
+  const { options } = await post('/passkey/auth/options', { email });
+  const publicKey = {
+    ...options,
+    challenge: b64urlToBuf(options.challenge),
+    allowCredentials: (options.allowCredentials || []).map((c) => ({
+      ...c, id: b64urlToBuf(c.id),
+    })),
+  };
+  const getOpts = { publicKey };
+  if (mediation) getOpts.mediation = mediation;
+  if (signal) getOpts.signal = signal;
+  const assertion = await navigator.credentials.get(getOpts);
+  if (!assertion) throw new Error(cfg().i18n.genericError);
+  const r = assertion.response;
+  return post('/passkey/auth/verify', {
+    handle: options.handle,
+    credentialId: assertion.id,
+    authenticatorData: bufToB64url(r.authenticatorData),
+    clientDataJSON: bufToB64url(r.clientDataJSON),
+    signature: bufToB64url(r.signature),
+    userHandle: r.userHandle ? bufToB64url(r.userHandle) : '',
+    remember,
+    redirect_to: redirectTo,
+  });
+}
+
+/** List the logged-in user's registered passkeys. */
+export async function passkeyList() {
+  const { passkeys } = await post('/passkey/list', {});
+  return passkeys || [];
+}
+
+/** Remove one of the user's passkeys by its (base64url) credential id. */
+export async function passkeyRemove(id) {
+  return post('/passkey/remove', { id });
+}
+
 /** Wire up the [otpress_form] default markup. Themes with custom UIs ignore this. */
 export function autobind(root = document) {
   root.querySelectorAll('[data-otpress-form]').forEach((form) => {
