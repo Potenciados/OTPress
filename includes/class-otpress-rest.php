@@ -240,6 +240,86 @@ class OTPress_REST {
             'callback'            => [self::class, 'password_disable'],
             'permission_callback' => [self::class, 'guard_logged_in'],
         ]);
+
+        // Active sessions (WP session tokens): list + revoke.
+        register_rest_route(self::NS, '/sessions', [
+            'methods'             => 'GET',
+            'callback'            => [self::class, 'sessions_list'],
+            'permission_callback' => [self::class, 'guard_logged_in'],
+        ]);
+        register_rest_route(self::NS, '/sessions/revoke', [
+            'methods'             => 'POST',
+            'callback'            => [self::class, 'sessions_revoke'],
+            'permission_callback' => [self::class, 'guard_logged_in'],
+            'args'                => ['id' => ['type' => 'string', 'required' => true]],
+        ]);
+        register_rest_route(self::NS, '/sessions/revoke-others', [
+            'methods'             => 'POST',
+            'callback'            => [self::class, 'sessions_revoke_others'],
+            'permission_callback' => [self::class, 'guard_logged_in'],
+        ]);
+    }
+
+    // ---------------------------------------------------------------------
+    // Active sessions: read the raw session_tokens usermeta (keyed by hashed
+    // verifier) so each can be listed and revoked individually.
+    // ---------------------------------------------------------------------
+
+    private static function current_session_key(): string {
+        $token = wp_get_session_token();
+        return '' !== $token ? hash('sha256', $token) : '';
+    }
+
+    public static function sessions_list(WP_REST_Request $request) {
+        $uid      = get_current_user_id();
+        $sessions = get_user_meta($uid, 'session_tokens', true);
+        $sessions = is_array($sessions) ? $sessions : [];
+        $current  = self::current_session_key();
+        $out      = [];
+        foreach ($sessions as $key => $s) {
+            $out[] = [
+                'id'         => (string) $key,
+                'ip'         => isset($s['ip']) ? (string) $s['ip'] : '',
+                'ua'         => isset($s['ua']) ? (string) $s['ua'] : '',
+                'login'      => isset($s['login']) ? (int) $s['login'] : 0,
+                'expiration' => isset($s['expiration']) ? (int) $s['expiration'] : 0,
+                'current'    => '' !== $current && hash_equals((string) $key, $current),
+            ];
+        }
+        // Current session first, then most-recent login.
+        usort($out, function ($a, $b) {
+            if ($a['current'] !== $b['current']) {
+                return $a['current'] ? -1 : 1;
+            }
+            return $b['login'] <=> $a['login'];
+        });
+        return new WP_REST_Response(['ok' => true, 'sessions' => $out]);
+    }
+
+    public static function sessions_revoke(WP_REST_Request $request) {
+        $uid = get_current_user_id();
+        $id  = preg_replace('/[^a-f0-9]/', '', strtolower((string) $request->get_param('id')));
+        if ('' === $id) {
+            return self::error(new WP_Error('otpress_bad_session', __('Unknown session.', 'otpress')), 400);
+        }
+        if (hash_equals($id, self::current_session_key())) {
+            return self::error(new WP_Error('otpress_current_session', __('Use log out to end the current session.', 'otpress')), 400);
+        }
+        $manager = WP_Session_Tokens::get_instance($uid);
+        try {
+            $m = new ReflectionMethod($manager, 'update_session');
+            $m->setAccessible(true);
+            $m->invoke($manager, $id, null); // null session = destroy
+        } catch (\ReflectionException $e) {
+            return self::error(new WP_Error('otpress_revoke_failed', __('Could not end that session.', 'otpress')), 500);
+        }
+        return new WP_REST_Response(['ok' => true]);
+    }
+
+    public static function sessions_revoke_others(WP_REST_Request $request) {
+        $manager = WP_Session_Tokens::get_instance(get_current_user_id());
+        $manager->destroy_others(wp_get_session_token());
+        return new WP_REST_Response(['ok' => true]);
     }
 
     // ---------------------------------------------------------------------

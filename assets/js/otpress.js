@@ -284,6 +284,25 @@ export async function passwordDisable() {
   return post('/password/disable', {});
 }
 
+// --- Active sessions ---
+/** List the current user's active sessions (device, ip, login time, current). */
+export async function listSessions() {
+  const res = await fetch(`${cfg().restUrl}/sessions`, {
+    credentials: 'same-origin', headers: { 'X-OTPress': '1' },
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || !data.ok) throw new Error(data.message || cfg().i18n.genericError);
+  return data.sessions || [];
+}
+/** Revoke a single session by id (not the current one). */
+export async function revokeSession(id) {
+  return post('/sessions/revoke', { id });
+}
+/** Revoke every session except the current one. */
+export async function revokeOtherSessions() {
+  return post('/sessions/revoke-others', {});
+}
+
 // --- Passkeys (WebAuthn) -------------------------------------------------
 
 /** ArrayBuffer / Uint8Array -> unpadded base64url string. */
