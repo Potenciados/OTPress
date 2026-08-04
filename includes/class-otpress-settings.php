@@ -51,6 +51,9 @@ class OTPress_Settings {
         // Delivery webhook (Meta app dashboard -> WhatsApp -> Configuration).
         'whatsapp_verify_token'    => '',
         'whatsapp_app_secret'      => '',
+        // Comma-separated URLs that get an untouched copy of every webhook
+        // payload (a helpdesk sharing the same WhatsApp number).
+        'whatsapp_relay_urls'      => '',
     ];
 
     public static function get(string $key): string {
@@ -138,6 +141,7 @@ class OTPress_Settings {
             'otp_max_unverified'       => 'Unused codes before a number is cut off',
             'whatsapp_verify_token'    => 'WhatsApp webhook verify token',
             'whatsapp_app_secret'      => 'WhatsApp app secret (webhook signature)',
+            'whatsapp_relay_urls'      => 'Forward webhooks to (comma-separated URLs)',
         ];
         ?>
         <div class="wrap">

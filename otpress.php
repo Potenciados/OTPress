@@ -3,7 +3,7 @@
  * Plugin Name:       OTPress
  * Plugin URI:        https://github.com/Potenciados/OTPress
  * Description:       Self-hosted, dependency-free authentication for WordPress & WooCommerce. Phone OTP, Google Sign-In and email link via Firebase Authentication, plus classic password login. A FOSS alternative to Digits with built-in migration.
- * Version:           0.15.0
+ * Version:           0.16.0
  * Requires at least: 6.0
  * Requires PHP:      8.1
  * Author:            OTPress Contributors
@@ -14,7 +14,7 @@
 
 defined('ABSPATH') || exit;
 
-define('OTPRESS_VERSION', '0.15.0');
+define('OTPRESS_VERSION', '0.16.0');
 define('OTPRESS_FILE', __FILE__);
 define('OTPRESS_DIR', plugin_dir_path(__FILE__));
 define('OTPRESS_URL', plugin_dir_url(__FILE__));

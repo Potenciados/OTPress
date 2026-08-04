@@ -46,6 +46,12 @@ class OTPress_WhatsApp_Webhook {
             return new WP_REST_Response('bad signature', 403);
         }
 
+        // Meta allows one callback URL per app, but a WhatsApp number is
+        // usually shared with a helpdesk (Chatwoot) that needs the same
+        // events. Pass every payload straight through so both systems keep
+        // working from a single subscription.
+        self::relay($request);
+
         $body = $request->get_json_params();
         foreach (($body['entry'] ?? []) as $entry) {
             foreach (($entry['changes'] ?? []) as $change) {
@@ -90,6 +96,43 @@ class OTPress_WhatsApp_Webhook {
         }
 
         return new WP_REST_Response(['ok' => true], 200);
+    }
+
+    /**
+     * Forward the payload, untouched, to anything else that needs these
+     * events — normally the helpdesk inbox on the same WhatsApp number.
+     *
+     * The body is passed through byte for byte along with Meta's signature
+     * headers, so a receiver that validates the signature still sees a valid
+     * one. Delivery is fire-and-forget: Meta retries on a slow response, and
+     * a helpdesk being down must not make us look unreachable.
+     */
+    private static function relay(WP_REST_Request $request): void {
+        $targets = array_filter(array_map('trim', explode(',', OTPress_Settings::get('whatsapp_relay_urls'))));
+        if (!$targets) {
+            return;
+        }
+
+        $headers = ['Content-Type' => 'application/json'];
+        foreach (['x_hub_signature_256' => 'X-Hub-Signature-256', 'x_hub_signature' => 'X-Hub-Signature'] as $in => $out) {
+            $value = (string) $request->get_header($in);
+            if ('' !== $value) {
+                $headers[$out] = $value;
+            }
+        }
+
+        $body = $request->get_body();
+        foreach ($targets as $url) {
+            if (!filter_var($url, FILTER_VALIDATE_URL)) {
+                continue;
+            }
+            wp_remote_post($url, [
+                'timeout'  => 5,
+                'blocking' => false,
+                'headers'  => $headers,
+                'body'     => $body,
+            ]);
+        }
     }
 
     /**
