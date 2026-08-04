@@ -46,6 +46,10 @@ class OTPress_Frontend {
             'firebase'         => OTPress_Settings::firebase_config(),
             'turnstileSiteKey' => OTPress_Settings::get('turnstile_site_key'),
             'whatsappEnabled'  => OTPress_WhatsApp_OTP::is_configured(),
+            // Calling codes where a paid code is never sent, so the UI can
+            // hide SMS/WhatsApp for them instead of offering an option that
+            // would only fail.
+            'blockedDialCodes' => OTPress_OTP_Budget::blocked_dial_codes(),
             'i18n'     => [
                 'genericError' => __('Something went wrong. Please try again.', 'otpress'),
                 'codeSent'     => __('We sent you a verification code.', 'otpress'),

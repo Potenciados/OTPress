@@ -43,6 +43,14 @@ class OTPress_Settings {
         'whatsapp_template_login'  => 'login_code',
         // Paid OTPs (SMS/WhatsApp) allowed per number per month; 0 disables.
         'otp_monthly_allowance'    => '8',
+        'otp_daily_ip'             => '5',
+        'otp_daily_subnet'         => '15',
+        'otp_daily_global'         => '300',
+        'otp_monthly_global'       => '5000',
+        'otp_max_unverified'       => '3',
+        // Delivery webhook (Meta app dashboard -> WhatsApp -> Configuration).
+        'whatsapp_verify_token'    => '',
+        'whatsapp_app_secret'      => '',
     ];
 
     public static function get(string $key): string {
@@ -123,6 +131,13 @@ class OTPress_Settings {
             'whatsapp_template_signup' => 'WhatsApp template for first-time numbers',
             'whatsapp_template_login'  => 'WhatsApp template for returning sign-ins',
             'otp_monthly_allowance'    => 'Paid OTPs per number per month (0 = unlimited)',
+            'otp_daily_ip'             => 'Paid OTPs per IP per day',
+            'otp_daily_subnet'         => 'Paid OTPs per subnet per day',
+            'otp_daily_global'         => 'Paid OTPs site-wide per day (hard ceiling)',
+            'otp_monthly_global'       => 'Paid OTPs site-wide per month (hard ceiling)',
+            'otp_max_unverified'       => 'Unused codes before a number is cut off',
+            'whatsapp_verify_token'    => 'WhatsApp webhook verify token',
+            'whatsapp_app_secret'      => 'WhatsApp app secret (webhook signature)',
         ];
         ?>
         <div class="wrap">
