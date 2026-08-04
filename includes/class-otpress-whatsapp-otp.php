@@ -114,8 +114,8 @@ class OTPress_WhatsApp_OTP {
         // credentials, the webhook subscription and the delivery log, and it
         // is shared with everything else that messages this number. Falling
         // back to a direct call keeps this plugin usable on its own.
-        if (function_exists('fy_whatsapp_send_template') && fy_whatsapp_ready()) {
-            $sent = fy_whatsapp_send_template($phone, self::template_name($context), self::template_lang(), $components);
+        if (function_exists('wa_send_template') && wa_ready()) {
+            $sent = wa_send_template($phone, self::template_name($context), self::template_lang(), $components);
             if (is_wp_error($sent)) {
                 delete_transient(self::key($phone));
                 return new WP_Error('otpress_wa_failed', __('We could not send the WhatsApp message. Please try again.', 'otpress'));
