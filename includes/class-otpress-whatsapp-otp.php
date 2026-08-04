@@ -95,42 +95,57 @@ class OTPress_WhatsApp_OTP {
             'created'  => time(),
         ], self::TTL);
 
-        $endpoint = sprintf(
-            'https://graph.facebook.com/v20.0/%s/messages',
-            rawurlencode(OTPress_Settings::get('whatsapp_phone_number_id'))
-        );
-        $payload = [
-            'messaging_product' => 'whatsapp',
-            'to'                => ltrim($phone, '+'),
-            'type'              => 'template',
-            'template'          => [
-                'name'     => self::template_name($context),
-                'language' => ['code' => self::template_lang()],
-                'components' => [
-                    [
-                        'type'       => 'body',
-                        'parameters' => [['type' => 'text', 'text' => $code]],
-                    ],
-                    [
-                        // Authentication templates ship a copy-code button whose
-                        // URL parameter is the code itself.
-                        'type'       => 'button',
-                        'sub_type'   => 'url',
-                        'index'      => '0',
-                        'parameters' => [['type' => 'text', 'text' => $code]],
-                    ],
-                ],
+        // Authentication templates carry the code twice: once in the body and
+        // once as the copy-code button's parameter.
+        $components = [
+            [
+                'type'       => 'body',
+                'parameters' => [['type' => 'text', 'text' => $code]],
+            ],
+            [
+                'type'       => 'button',
+                'sub_type'   => 'url',
+                'index'      => '0',
+                'parameters' => [['type' => 'text', 'text' => $code]],
             ],
         ];
 
-        $response = wp_remote_post($endpoint, [
-            'timeout' => 15,
-            'headers' => [
-                'Authorization' => 'Bearer ' . OTPress_Settings::get('whatsapp_token'),
-                'Content-Type'  => 'application/json',
-            ],
-            'body'    => wp_json_encode($payload),
-        ]);
+        // Prefer the site's WhatsApp service when present: it owns the
+        // credentials, the webhook subscription and the delivery log, and it
+        // is shared with everything else that messages this number. Falling
+        // back to a direct call keeps this plugin usable on its own.
+        if (function_exists('fy_whatsapp_send_template') && fy_whatsapp_ready()) {
+            $sent = fy_whatsapp_send_template($phone, self::template_name($context), self::template_lang(), $components);
+            if (is_wp_error($sent)) {
+                delete_transient(self::key($phone));
+                return new WP_Error('otpress_wa_failed', __('We could not send the WhatsApp message. Please try again.', 'otpress'));
+            }
+            return true;
+        }
+
+        $response = wp_remote_post(
+            sprintf(
+                'https://graph.facebook.com/v20.0/%s/messages',
+                rawurlencode(OTPress_Settings::get('whatsapp_phone_number_id'))
+            ),
+            [
+                'timeout' => 15,
+                'headers' => [
+                    'Authorization' => 'Bearer ' . OTPress_Settings::get('whatsapp_token'),
+                    'Content-Type'  => 'application/json',
+                ],
+                'body'    => wp_json_encode([
+                    'messaging_product' => 'whatsapp',
+                    'to'                => ltrim($phone, '+'),
+                    'type'              => 'template',
+                    'template'          => [
+                        'name'       => self::template_name($context),
+                        'language'   => ['code' => self::template_lang()],
+                        'components' => $components,
+                    ],
+                ]),
+            ]
+        );
 
         $failed = is_wp_error($response)
             || 200 !== wp_remote_retrieve_response_code($response)
