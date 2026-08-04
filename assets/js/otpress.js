@@ -27,6 +27,25 @@ async function ensureFirebase() {
         import(gstatic('firebase-auth.js')),
       ]);
       const app = initializeApp(cfg().firebase);
+
+      // App Check attests that the request comes from our own site before
+      // Firebase will spend an SMS. Without it the project can be driven from
+      // anywhere with just the (public) web config, which is how SMS pumping
+      // gets billed to us. The site key is public by design; enforcement is
+      // switched on separately in the Firebase project.
+      const appCheckKey = cfg().appCheckKey;
+      if (appCheckKey) {
+        try {
+          const { initializeAppCheck, ReCaptchaV3Provider } = await import(gstatic('firebase-app-check.js'));
+          initializeAppCheck(app, {
+            provider: new ReCaptchaV3Provider(appCheckKey),
+            isTokenAutoRefreshEnabled: true,
+          });
+        } catch (e) {
+          // Never block sign-in on attestation failing to load.
+        }
+      }
+
       const auth = authMod.getAuth(app);
       auth.useDeviceLanguage();
       return { auth, authMod };

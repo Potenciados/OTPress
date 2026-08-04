@@ -45,6 +45,8 @@ class OTPress_Frontend {
             'restUrl'          => esc_url_raw(rest_url('otpress/v1')),
             'firebase'         => OTPress_Settings::firebase_config(),
             'turnstileSiteKey' => OTPress_Settings::get('turnstile_site_key'),
+            // reCAPTCHA v3 site key for Firebase App Check (public by design).
+            'appCheckKey'      => OTPress_Settings::get('appcheck_site_key'),
             'whatsappEnabled'  => OTPress_WhatsApp_OTP::is_configured(),
             // Calling codes where a paid code is never sent, so the UI can
             // hide SMS/WhatsApp for them instead of offering an option that
