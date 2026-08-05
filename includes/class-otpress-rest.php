@@ -1103,12 +1103,24 @@ class OTPress_REST {
          */
         $redirect = apply_filters('otpress_login_redirect', $redirect, $user);
 
-        return new WP_REST_Response([
+        $payload = [
             'ok'       => true,
             'redirect' => $redirect,
             'user'     => ['display_name' => $user->display_name],
             'prompts'  => self::pending_prompts($user->ID),
-        ]);
+        ];
+
+        /**
+         * Filter the whole successful-login response payload. Lets the theme
+         * attach extra keys (e.g. an `onboarding` object for a just-created
+         * account) without the plugin needing to know about them.
+         *
+         * @param array   $payload
+         * @param WP_User $user
+         */
+        $payload = apply_filters('otpress_login_payload', $payload, $user);
+
+        return new WP_REST_Response($payload);
     }
 
     /**
