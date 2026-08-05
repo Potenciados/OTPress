@@ -19,6 +19,9 @@ class OTPress_Settings {
         'firebase_api_key'     => '',
         'firebase_auth_domain' => '',
         'firebase_project_id'  => '',
+        // Firebase Web app ID (1:NNN:web:XXXX). Required by App Check; without
+        // it initializeApp() has no appId and App Check hits /apps/undefined.
+        'firebase_app_id'      => '',
         // Look up users by Digits usermeta and write Digits-compatible meta
         // for new users, so existing Digits installs migrate transparently.
         'digits_compat'        => '1',
@@ -77,6 +80,7 @@ class OTPress_Settings {
             'apiKey'     => self::get('firebase_api_key'),
             'authDomain' => self::get('firebase_auth_domain'),
             'projectId'  => self::get('firebase_project_id'),
+            'appId'      => self::get('firebase_app_id'),
         ];
     }
 
@@ -126,6 +130,7 @@ class OTPress_Settings {
             'firebase_api_key'     => 'Firebase API key',
             'firebase_auth_domain' => 'Firebase auth domain',
             'firebase_project_id'  => 'Firebase project ID',
+            'firebase_app_id'      => 'Firebase Web app ID (1:NNN:web:XXXX)',
             'phone_meta_keys'      => 'Phone usermeta keys (comma-separated)',
             'default_role'         => 'Role for new users (blank = site default)',
             'turnstile_site_key'   => 'Cloudflare Turnstile site key (optional)',

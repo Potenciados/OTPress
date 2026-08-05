@@ -160,12 +160,25 @@ class OTPress_User_Mapper {
      */
     private static function create_user(string $phone, string $email, bool $email_verified, array $claims, array $profile) {
         $provider = (string) ($claims['firebase']['sign_in_provider'] ?? '');
+        $sub = (string) ($claims['sub'] ?? '');
         $display = sanitize_text_field((string) ($profile['display_name'] ?? ($claims['name'] ?? '')));
 
         if ('' !== $email && $email_verified) {
             $base = sanitize_user(strstr($email, '@', true), true);
         } elseif ('' !== $phone) {
             $base = 'user' . preg_replace('/\D+/', '', $phone);
+        } elseif ('' !== $sub) {
+            // Federated provider (typically Facebook) that returned neither a
+            // verified email nor a phone. The Firebase uid still uniquely
+            // identifies this person, so the account is created keyed on it via
+            // sync_meta(). The unverified email is intentionally NOT written to
+            // user_email (see wp_insert_user below) so it can never seed an
+            // account-takeover through the email-match path in resolve().
+            $base = sanitize_user($display, true);
+            if ('' === $base) {
+                $provider_slug = preg_replace('/[^a-z0-9]+/', '', strtolower(strstr($provider . '.', '.', true)));
+                $base = 'user_' . ($provider_slug ?: 'social');
+            }
         } else {
             return new WP_Error('otpress_no_identity', __('The sign-in provider returned no usable identity.', 'otpress'));
         }

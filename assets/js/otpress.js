@@ -159,7 +159,18 @@ const PROVIDER_FACTORIES = {
     p.addScope('email');
     return p;
   },
-  'microsoft.com': (m) => new m.OAuthProvider('microsoft.com'),
+  'microsoft.com': (m) => {
+    const p = new m.OAuthProvider('microsoft.com');
+    // Ask for the email/profile explicitly so the returned Firebase claims
+    // carry a usable identity (custom-domain M365 tenants otherwise return
+    // none). `tenant: common` lets any work/school or personal account in;
+    // `prompt: select_account` avoids silently reusing a stale session.
+    p.addScope('openid');
+    p.addScope('email');
+    p.addScope('profile');
+    p.setCustomParameters({ tenant: 'common', prompt: 'select_account' });
+    return p;
+  },
 };
 
 export async function providerLogin(providerId, { redirectTo = '' } = {}) {
