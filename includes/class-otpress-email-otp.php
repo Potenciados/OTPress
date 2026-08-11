@@ -36,7 +36,8 @@ class OTPress_Email_OTP {
         $subject = apply_filters(
             'otpress_email_otp_subject',
             __('Your verification code', 'otpress'),
-            $email
+            $email,
+            $code
         );
         $message = apply_filters(
             'otpress_email_otp_message',
