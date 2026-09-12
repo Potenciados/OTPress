@@ -20,6 +20,8 @@ define('OTPRESS_DIR', plugin_dir_path(__FILE__));
 define('OTPRESS_URL', plugin_dir_url(__FILE__));
 
 require_once OTPRESS_DIR . 'includes/class-otpress-settings.php';
+require_once OTPRESS_DIR . 'includes/class-wa-client.php';
+require_once OTPRESS_DIR . 'includes/class-wa-webhook.php';
 require_once OTPRESS_DIR . 'includes/class-otpress-jwt.php';
 require_once OTPRESS_DIR . 'includes/class-otpress-token-verifier.php';
 require_once OTPRESS_DIR . 'includes/class-otpress-user-mapper.php';
@@ -34,6 +36,21 @@ require_once OTPRESS_DIR . 'includes/class-otpress-rest.php';
 require_once OTPRESS_DIR . 'includes/class-otpress-frontend.php';
 
 add_action('rest_api_init', ['OTPress_REST', 'register_routes']);
+add_action('rest_api_init', ['WA_Webhook', 'register_routes']);
+
+// Backwards-compatible service API for site integrations. The WhatsApp
+// transport and webhook now belong to OTPress; consumers do not need to know
+// which plugin owns the implementation.
+if (!function_exists('wa_send_template')) {
+    function wa_send_template(string $to, string $template, string $lang = 'es', array $components = []) {
+        return WA_Client::send_template($to, $template, $lang, $components);
+    }
+}
+if (!function_exists('wa_ready')) {
+    function wa_ready(): bool {
+        return WA_Client::is_configured();
+    }
+}
 add_action('init', ['OTPress_Frontend', 'register_assets']);
 add_action('init', ['OTPress_Frontend', 'register_shortcode']);
 add_action('admin_menu', ['OTPress_Settings', 'register_admin_page']);
